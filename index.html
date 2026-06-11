@@ -1233,14 +1233,20 @@ function App() {
 
   function addProject() {
     if(!gForm.name) return;
-    setDb(d=>({...d,projects:[...d.projects,{id:gid(),name:gForm.name,goals:[],expenses:[],products:[],createdAt:Date.now()}]}));
- setGForm(EG()); setView("dashboard"); toast_("Project created ✦");
+    const uid=getUserId();
+    const newId=gid();
+    setDb(d=>({...d,projects:[...d.projects,{id:newId,name:gForm.name,goals:[],expenses:[],products:[],createdAt:Date.now()}]}));
+    if(uid){db_.insert('projects',{id:newId,user_id:uid,name:gForm.name}).catch(e=>console.error('Project save failed:',e));}
+    setGForm(EG()); setView("dashboard"); toast_("Project created ✦");
   }
   function addGoal(pid=null, parentGoalId=null) {
     const f=gForm; if(!f.name||!f.target) return;
+    const uid=getUserId();
     const g={id:gid(),name:f.name,target:parseFloat(f.target),category:f.category,period:f.period,dateStart:f.dateStart||null,dateEnd:f.dateEnd||null,entries:[],subGoals:[],createdAt:Date.now(),createdStr:today(),archived:false,recurring:null,parentId:parentGoalId||null};
     if(pid) setDb(d=>({...d,projects:d.projects.map(p=>p.id===pid?{...p,goals:[...(p.goals||[]),g]}:p)}));
-    else setDb(d=>({...d,goals:[...d.goals,g]}));setGForm(EG()); setView(pid?"project":"dashboard"); toast_("Goal created ✦");
+    else setDb(d=>({...d,goals:[...d.goals,g]}));
+    if(uid){db_.insert('goals',{id:g.id,user_id:uid,project_id:pid||null,parent_id:parentGoalId||null,name:g.name,target:g.target,category:g.category,period:g.period,date_start:g.dateStart,date_end:g.dateEnd,archived:false}).catch(e=>console.error('Goal save failed:',e));}
+    setGForm(EG()); setView(pid?"project":"dashboard"); toast_("Goal created ✦");
   }
   function addEntry() {
     const f=eForm; if(!f.amount) return;
@@ -1263,12 +1269,16 @@ function App() {
     if(!xForm.name||!xForm.amount) return;
     const x={id:gid(),...xForm,amount:parseFloat(xForm.amount)};
     setDb(d=>({...d,projects:d.projects.map(p=>p.id===pid?{...p,expenses:[...(p.expenses||[]),x]}:p)}));
+    const uid=getUserId();
+    if(uid){db_.insert('expenses',{id:x.id,user_id:uid,project_id:pid,name:x.name,amount:x.amount,category:x.category||'Other',freq:x.freq||'monthly',start_date:x.startDate||null,note:x.note||null}).catch(e=>console.error('Expense save failed:',e));}
     setXForm(EX()); setView("project"); toast_("Expense added ✦");
   }
   function addProduct(pid) {
     if(!pForm.name||!pForm.unitCost) return;
     const pr={id:gid(),...pForm,unitCost:parseFloat(pForm.unitCost)};
     setDb(d=>({...d,projects:d.projects.map(p=>p.id===pid?{...p,products:[...(p.products||[]),pr]}:p)}));
+    const uid=getUserId();
+    if(uid){db_.insert('products',{id:pr.id,user_id:uid,project_id:pid,name:pr.name,unit_cost:pr.unitCost||0,unit:pr.unit||'pair',is_premium:pr.isPremium||false}).catch(e=>console.error('Product save failed:',e));}
     setPForm(EP()); setView("project"); toast_("Product added ✦");
   }
   function delEntry(eid,gid_,pid){updGoal(gid_,g=>({...g,entries:(g.entries||[]).filter(e=>e.id!==eid)}),pid);toast_("Entry deleted");}
@@ -1319,6 +1329,7 @@ function App() {
   function delGoal(gid_,pid){
     if(pid) setDb(d=>({...d,projects:d.projects.map(p=>p.id===pid?{...p,goals:(p.goals||[]).filter(g=>g.id!==gid_)}:p)}));
     else setDb(d=>({...d,goals:d.goals.filter(g=>g.id!==gid_)}));
+    db_.delete('goals',gid_).catch(console.error);
     setMod(m=>({...m,confirm:null})); setView(pid?"project":"dashboard"); toast_("Goal deleted");
   }
   function delProj(pid){setDb(d=>({...d,projects:d.projects.filter(p=>p.id!==pid)}));setMod(m=>({...m,confirm:null}));setView("dashboard");toast_("Project deleted");}
