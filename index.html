@@ -517,7 +517,7 @@ const SRC = {
 const PERIODS = {weekly:"Weekly",monthly:"Monthly",yearly:"Yearly",custom:"Custom"};
 const DAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 
-const gid = () => Math.random().toString(36).slice(2,10);
+const gid = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const r=Math.random()*16|0;return(c==='x'?r:(r&0x3|0x8)).toString(16);});
 const today = () => new Date().toISOString().slice(0,10);
 const fmtGBP = n => `£${Number(n).toLocaleString("en-GB",{minimumFractionDigits:0,maximumFractionDigits:2})}`;
 const fd = iso => iso ? new Date(iso+"T00:00:00").toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"}) : "";
