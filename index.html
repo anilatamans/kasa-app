@@ -1977,7 +1977,9 @@ function App() {
               <div style={{minWidth:56,flexShrink:0}}><div style={{fontSize:13,fontWeight:500,color:"#FAF7F0"}}>{pr.unit}</div><div style={{fontSize:11,color:"#FAF7F0"}}>£{pr.unitCost}</div></div>
               <div style={{flex:1,fontSize:13,fontWeight:500,color:"#FAF7F0"}}>{pr.name}</div>
               <div style={{textAlign:"right",flexShrink:0,marginRight:6}}><div style={{fontSize:13,color:"#FAF7F0",fontWeight:700}}>{sold} sold</div><div style={{fontSize:13,fontWeight:500,color:"#FAF7F0"}}>{fmtGBP(sold*pr.unitCost)}</div></div>
-              <button style={{background:"none",border:"none",color:"#FAF7F0",fontSize:17,cursor:"pointer",padding:"0 2px"}} onClick={()=>delProd(selProj.id,pr.id)}>×</button>
+              <button style={{background:"rgba(250,247,240,0.2)",border:"1px solid rgba(250,247,240,0.5)",color:"#FAF7F0",borderRadius:5,fontSize:11,cursor:"pointer",padding:"3px 7px",marginRight:4}} onClick={()=>setEditingProduct({pid:selProj.id,prod:{...pr,unitCost:pr.unitCost||pr.unit_cost||0,isPremium:pr.isPremium||pr.is_premium||false}})}>Edit</button>
+              <button style={{background:"rgba(250,247,240,0.1)",border:"1px solid rgba(250,247,240,0.3)",color:"#FAF7F0",borderRadius:5,fontSize:11,cursor:"pointer",padding:"3px 7px",marginRight:4}} onClick={()=>setViewProduct({productId:pr.id,pid:selProj.id,name:pr.name})}>Details</button>
+              <button style={{background:"none",border:"none",color:"#FAF7F0",fontSize:17,cursor:"pointer",padding:"0 2px",opacity:0.5}} onClick={()=>delProd(selProj.id,pr.id)}>×</button>
             </div>;
           })}
           {pc>0&&<div style={{marginTop:9,padding:"9px 11px",background:"#B02A1E",borderRadius:8,display:"flex",justifyContent:"space-between"}}><span style={{fontSize:13,fontWeight:500,color:"#FAF7F0"}}>Total product cost</span><span style={{fontSize:15,fontWeight:700,color:"#FAF7F0"}}>{fmtGBP(pc)}</span></div>}
@@ -2010,6 +2012,48 @@ function App() {
           </>}
         </div>
         <Tabs tabs={["entries","expenses","insights","recurring"]} active={goalTab} color={c} onChange={setGoalTab}/>
+        {goalTab==="expenses"&&<>
+          <button style={{...S.btn,marginBottom:11}} onClick={()=>{setXForm(EX());setView("newGoalExpense");}}>+ Add Expense</button>
+          {(selGoal.expenses||[]).length>0&&<>
+            {(selGoal.expenses||[]).map(x=>(
+              <div key={x.id} style={{display:"flex",alignItems:"center",gap:6,background:"#A02218",padding:"10px 11px",borderRadius:8,marginBottom:4}}>
+                <div style={{minWidth:50,flexShrink:0}}>
+                  <div style={{fontSize:11,color:"#FAF7F0",fontWeight:500}}>{x.freq==="one-off"?new Date((x.startDate||x.start_date||today())+"T00:00:00").toLocaleDateString("en-GB",{day:"2-digit",month:"short"}):x.freq}</div>
+                  <div style={{fontSize:10,color:"#FAD5C8"}}>{x.category}</div>
+                </div>
+                <div style={{flex:1,fontSize:13,fontWeight:600,color:"#FAF7F0",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{x.name}</div>
+                <div style={{fontSize:13,fontWeight:700,color:"#F87171",flexShrink:0,marginRight:4}}>{fmtGBP(expCost(x))}</div>
+                <button style={{background:"rgba(250,247,240,0.2)",border:"1px solid #FAF7F0",color:"#FAF7F0",borderRadius:5,fontSize:11,cursor:"pointer",padding:"3px 7px",marginRight:2}} onClick={()=>setEditingExp({pid:sel.pid,gid_:sel.gid_,exp:{...x}})}>Edit</button>
+                <button style={{background:"none",border:"none",color:"#FAF7F0",fontSize:17,cursor:"pointer",opacity:0.5}} onClick={()=>{updGoal(sel.gid_,g=>({...g,expenses:(g.expenses||[]).filter(e=>e.id!==x.id)}),sel.pid);db_.delete("expenses",x.id).catch(console.error);toast_("Deleted");}}>×</button>
+              </div>
+            ))}
+            <div style={{padding:"9px 11px",background:"#721408",borderRadius:8,display:"flex",justifyContent:"space-between",marginBottom:8}}>
+              <span style={{fontSize:13,color:"#FAF7F0"}}>Total</span>
+              <span style={{fontSize:14,fontWeight:700,color:"#F87171"}}>{fmtGBP(goalExpTotal(selGoal))}</span>
+            </div>
+          </>}
+          {(selGoal.expenses||[]).length===0&&<div style={{color:"#FAD5C8",fontSize:13,textAlign:"center",padding:"16px 0"}}>No expenses yet</div>}
+          {sel.pid&&(()=>{
+            const proj=db.projects.find(p=>p.id===sel.pid);
+            const projExps=(proj&&proj.expenses||[]).filter(e=>!e.goalId&&!e.goal_id);
+            if(!projExps.length) return null;
+            return <div style={{marginTop:12}}>
+              <div style={{fontSize:10,letterSpacing:2,color:"#FAD5C8",textTransform:"uppercase",marginBottom:8}}>Move from project</div>
+              {projExps.map(x=>(
+                <div key={x.id} style={{display:"flex",alignItems:"center",gap:8,background:"#721408",padding:"9px 11px",borderRadius:8,marginBottom:4}}>
+                  <div style={{flex:1,fontSize:12,color:"#FAD5C8"}}>{x.name} · {fmtGBP(expCost(x))}</div>
+                  <button style={{background:"rgba(250,247,240,0.15)",border:"1px solid #FAF7F0",color:"#FAF7F0",borderRadius:5,fontSize:11,cursor:"pointer",padding:"4px 10px",fontWeight:600}} onClick={()=>{
+                    const moved={...x,goalId:sel.gid_,goal_id:sel.gid_};
+                    setDb(d=>({...d,projects:d.projects.map(p=>p.id===sel.pid?{...p,expenses:(p.expenses||[]).filter(e=>e.id!==x.id)}:p)}));
+                    updGoal(sel.gid_,g=>({...g,expenses:[...(g.expenses||[]),moved]}),sel.pid);
+                    db_.update("expenses",x.id,{goal_id:sel.gid_}).catch(console.error);
+                    toast_("Moved ✦");
+                  }}>Move here →</button>
+                </div>
+              ))}
+            </div>;
+          })()}
+        </>}
         {goalTab==="entries"&&((!selGoal.entries||selGoal.entries.length===0)
           ?<div style={{color:"#FAF7F0",fontSize:14,textAlign:"center",padding:"22px 0"}}>No entries yet</div>
           :<div>{selGoal.entries.map(e=>{
