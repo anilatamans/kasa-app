@@ -1266,6 +1266,12 @@ function App() {
         return {...p,goals:[...rest,{...gen,entries:[...(gen.entries||[]),entry].sort((a,b)=>b.date.localeCompare(a.date))}]};
       })}));
     }
+    const uid=getUserId();
+    if(uid){
+      const goalId=f.goalId||null;
+      const projId=f.projectId||sel.pid||null;
+      db_.insert("entries",{id:entry.id,user_id:uid,goal_id:goalId,project_id:projId,amount:entry.amount,source:entry.source||"Cash",note:entry.note||null,date:entry.date||today(),units:entry.units||0,is_recurring:false}).catch(e=>console.error("Entry save failed:",e));
+    }
     setEForm(EE()); setView(sel.gid_?"goal":sel.pid?"project":"dashboard"); toast_("Income added ✦");
   }
   function addExpense(pid, goalId=null) {
@@ -1860,7 +1866,7 @@ function App() {
           <button style={{...S.btn,marginBottom:11}} onClick={()=>{setPForm(EP());setView("newProduct");}}>+ Add Product</button>
           {(selProj.products||[]).length===0&&<div style={{color:"#FAF7F0",fontSize:14,textAlign:"center",padding:"20px 0"}}>No products yet</div>}
           {(selProj.products||[]).map(pr=>{
-            const sold=allE.filter(e=>e.productId===pr.id).reduce((s,e)=>s+Number(e.units||0),0);
+            const sold=allE.filter(e=>(e.productId===pr.id)||(e.note&&e.note.toLowerCase().includes(pr.name.toLowerCase()))).reduce((s,e)=>s+Number(e.units||0),0);
             return <div key={pr.id} style={S.entryRow}>
               <div style={{minWidth:56,flexShrink:0}}><div style={{fontSize:13,fontWeight:500,color:"#FAF7F0"}}>{pr.unit}</div><div style={{fontSize:11,color:"#FAF7F0"}}>£{pr.unitCost}</div></div>
               <div style={{flex:1,fontSize:13,fontWeight:500,color:"#FAF7F0"}}>{pr.name}</div>
@@ -1897,7 +1903,7 @@ function App() {
             </div>
           </>}
         </div>
-        <Tabs tabs={["entries","insights","recurring"]} active={goalTab} color={c} onChange={setGoalTab}/>
+        <Tabs tabs={["entries","expenses","insights","recurring"]} active={goalTab} color={c} onChange={setGoalTab}/>
         {goalTab==="entries"&&((!selGoal.entries||selGoal.entries.length===0)
           ?<div style={{color:"#FAF7F0",fontSize:14,textAlign:"center",padding:"22px 0"}}>No entries yet</div>
           :<div>{selGoal.entries.map(e=>{
