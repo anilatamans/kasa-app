@@ -1084,6 +1084,8 @@ function App() {
   }
   const [editingProj, setEditingProj] = useState(null);
   const [editingGoal, setEditingGoal] = useState(null);
+  const [editingProduct, setEditingProduct] = useState(null);
+  const [viewProduct, setViewProduct] = useState(null); // {productId, pid}
   const [editingExp, setEditingExp] = useState(null);
 
   const [session, setSession] = useState(()=>{
@@ -1182,7 +1184,7 @@ function App() {
         return {
         ...p,
         goals: projGoals.map(g=>buildGoal(g,goals||[],expenses||[],entries||[])),
-        expenses: (expenses||[]).filter(e=>e.project_id===p.id).map(e=>({
+        expenses: (expenses||[]).filter(e=>e.project_id===p.id&&!e.goal_id).map(e=>({
           ...e, amount:Number(e.amount),
           startDate: e.start_date, freq: e.freq||'monthly'
         })),
@@ -1268,9 +1270,10 @@ function App() {
     }
     const uid=getUserId();
     if(uid){
-      const goalId=f.goalId||null;
+      const goalId=f.goalId||sel.gid_||null;
       const projId=f.projectId||sel.pid||null;
-      db_.insert("entries",{id:entry.id,user_id:uid,goal_id:goalId,project_id:projId,amount:entry.amount,source:entry.source||"Cash",note:entry.note||null,date:entry.date||today(),units:entry.units||0,is_recurring:false}).catch(e=>console.error("Entry save failed:",e));
+      console.log("Saving entry - goal_id:", goalId, "project_id:", projId);
+      db_.insert("entries",{id:entry.id,user_id:uid,goal_id:goalId,project_id:projId,amount:entry.amount,source:entry.source||"Cash",note:entry.note||null,date:entry.date||today(),units:entry.units||0,is_recurring:false}).then(()=>console.log("Entry saved OK")).catch(e=>console.error("Entry save failed:",e));
     }
     setEForm(EE()); setView(sel.gid_?"goal":sel.pid?"project":"dashboard"); toast_("Income added ✦");
   }
@@ -1278,12 +1281,12 @@ function App() {
     if(!xForm.name||!xForm.amount) return;
     const x={id:gid(),...xForm,amount:parseFloat(xForm.amount),goalId:goalId||null};
     if(goalId) {
-      updGoal(goalId, g=>({...g,expenses:[...(g.expenses||[]),x]}), pid);
+      updGoal(goalId, g=>({...g,expenses:[...(g.expenses||[]),{...x,goalId,goal_id:goalId}]}), pid);
     } else {
       setDb(d=>({...d,projects:d.projects.map(p=>p.id===pid?{...p,expenses:[...(p.expenses||[]),x]}:p)}));
     }
     const uid=getUserId();
-    if(uid){db_.insert('expenses',{id:x.id,user_id:uid,project_id:pid,goal_id:goalId||null,name:x.name,amount:x.amount,category:x.category||'Other',freq:x.freq||'monthly',start_date:x.startDate||null,note:x.note||null}).catch(e=>console.error('Expense save failed:',e));}
+    if(uid){db_.insert('expenses',{id:x.id,user_id:uid,project_id:pid||null,goal_id:goalId||null,name:x.name,amount:x.amount,category:x.category||'Other',freq:x.freq||'monthly',start_date:x.startDate||null,note:x.note||null}).then(()=>console.log('Expense saved')).catch(e=>console.error('Expense save failed:',e));}
     setXForm(EX()); setView("project"); toast_("Expense added ✦");
   }
   function addProduct(pid) {
@@ -1358,15 +1361,23 @@ function App() {
     toast_("Entry moved ✦");
   }
   function saveEditExp(pid,exp,gid_=null){
-    const updated={...exp,amount:parseFloat(exp.amount)};
-    if(gid_){
-      updGoal(gid_,g=>({...g,expenses:(g.expenses||[]).map(e=>e.id===exp.id?updated:e)}),pid);
-    } else {
-      setDb(d=>({...d,projects:d.projects.map(p=>p.id===pid?{...p,expenses:(p.expenses||[]).map(e=>e.id===exp.id?updated:e)}:p)}));
-    }
-    db_.update("expenses",exp.id,{name:exp.name,amount:parseFloat(exp.amount),category:exp.category||"Other",freq:exp.freq||"monthly",start_date:exp.startDate||null,note:exp.note||null}).catch(e=>console.error("Expense update failed:",e));
-    setEditingExp(null);toast_("Expense updated ✦");
-  }  function delProd(pid,prodId){setDb(d=>({...d,projects:d.projects.map(p=>p.id===pid?{...p,products:(p.products||[]).filter(pr=>pr.id!==prodId)}:p)}));db_.delete('products',prodId).catch(console.error);toast_("Deleted");}
+    try {
+      const updated={...exp,amount:parseFloat(exp.amount)};
+      if(gid_){
+        updGoal(gid_,g=>({...g,expenses:(g.expenses||[]).map(e=>e.id===exp.id?updated:e)}),pid);
+      } else {
+        setDb(d=>({...d,projects:d.projects.map(p=>p.id===pid?{...p,expenses:(p.expenses||[]).map(e=>e.id===exp.id?updated:e)}:p)}));
+      }
+      db_.update("expenses",exp.id,{name:exp.name,amount:parseFloat(exp.amount),category:exp.category||"Other",freq:exp.freq||"monthly",start_date:exp.startDate||null,note:exp.note||null}).then(()=>toast_("Expense updated ✦")).catch(e=>{console.error("Expense update failed:",e);toast_("Saved locally");});
+      setEditingExp(null);
+    } catch(e){ console.error(e); setEditingExp(null); }
+  }  function saveEditProduct(pid, prod) {
+    setDb(d=>({...d,projects:d.projects.map(p=>p.id===pid?{...p,products:(p.products||[]).map(pr=>pr.id===prod.id?{...prod,unitCost:parseFloat(prod.unitCost)}:pr)}:p)}));
+    db_.update('products',prod.id,{name:prod.name,unit_cost:parseFloat(prod.unitCost),unit:prod.unit||'pair',is_premium:prod.isPremium||false}).catch(console.error);
+    setEditingProduct(null);
+    toast_("Product updated ✦");
+  }
+  function delProd(pid,prodId){setDb(d=>({...d,projects:d.projects.map(p=>p.id===pid?{...p,products:(p.products||[]).filter(pr=>pr.id!==prodId)}:p)}));db_.delete('products',prodId).catch(console.error);toast_("Deleted");}
 
   const allPG = db.projects.flatMap(p=>p.goals||[]);
   const allG = [...allPG,...db.goals];
@@ -1437,6 +1448,33 @@ function App() {
         <div style={{display:"flex",gap:8}}>
           <button style={{flex:1,background:"transparent",border:"1px solid #FAF7F0",color:"#FAF7F0",borderRadius:10,padding:"11px",fontSize:13,cursor:"pointer"}} onClick={()=>setEditingProj(null)}>Cancel</button>
           <button style={{flex:1,background:"#FAF7F0",color:"#C0392B",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer"}} onClick={()=>saveEditProj(editingProj.pid,editingProj.name,editingProj.isGeneral,editingProj.gid_,editingProj.icon)}>Save</button>
+        </div>
+      </div>
+    </div>}
+    {editingProduct&&<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+      <div style={{background:"#A02218",border:"1px solid rgba(250,247,240,0.3)",borderRadius:16,padding:20,width:"100%",maxWidth:360,color:"#FAF7F0"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+          <div style={{fontSize:17,fontWeight:700}}>Edit Product</div>
+          <button style={{background:"none",border:"none",color:"#FAF7F0",fontSize:22,cursor:"pointer"}} onClick={()=>setEditingProduct(null)}>×</button>
+        </div>
+        <div style={{marginBottom:14}}>
+          <label style={{display:"block",fontSize:11,letterSpacing:1.5,color:"#FAF7F0",textTransform:"uppercase",marginBottom:6,fontWeight:600}}>Name</label>
+          <input style={{width:"100%",background:"#8B1A0F",border:"1px solid #FAF7F0",borderRadius:9,padding:"11px 13px",color:"#FAF7F0",fontSize:14,outline:"none",boxSizing:"border-box"}} value={editingProduct.prod.name} onChange={e=>setEditingProduct(v=>({...v,prod:{...v.prod,name:e.target.value}}))}/>
+        </div>
+        <div style={{marginBottom:14}}>
+          <label style={{display:"block",fontSize:11,letterSpacing:1.5,color:"#FAF7F0",textTransform:"uppercase",marginBottom:6,fontWeight:600}}>Unit Cost (£)</label>
+          <input type="number" style={{width:"100%",background:"#8B1A0F",border:"1px solid #FAF7F0",borderRadius:9,padding:"11px 13px",color:"#FAF7F0",fontSize:14,outline:"none",boxSizing:"border-box"}} value={editingProduct.prod.unitCost} onChange={e=>setEditingProduct(v=>({...v,prod:{...v.prod,unitCost:e.target.value}}))}/>
+        </div>
+        <div style={{marginBottom:16}}>
+          <label style={{display:"block",fontSize:11,letterSpacing:1.5,color:"#FAF7F0",textTransform:"uppercase",marginBottom:8,fontWeight:600}}>Type</label>
+          <div style={{display:"flex",gap:8}}>
+            <div style={{flex:1,background:!editingProduct.prod.isPremium?"#FAF7F0":"transparent",border:"1px solid #FAF7F0",borderRadius:8,padding:"9px",textAlign:"center",cursor:"pointer",color:!editingProduct.prod.isPremium?"#8B1A0F":"#FAF7F0",fontSize:12,fontWeight:!editingProduct.prod.isPremium?700:400}} onClick={()=>setEditingProduct(v=>({...v,prod:{...v.prod,isPremium:false}}))}>Standard</div>
+            <div style={{flex:1,background:editingProduct.prod.isPremium?"#FAF7F0":"transparent",border:"1px solid #FAF7F0",borderRadius:8,padding:"9px",textAlign:"center",cursor:"pointer",color:editingProduct.prod.isPremium?"#8B1A0F":"#FAF7F0",fontSize:12,fontWeight:editingProduct.prod.isPremium?700:400}} onClick={()=>setEditingProduct(v=>({...v,prod:{...v.prod,isPremium:true}}))}>★ Premium</div>
+          </div>
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          <button style={{flex:1,background:"transparent",border:"1px solid #FAF7F0",color:"#FAF7F0",borderRadius:10,padding:"11px",fontSize:13,cursor:"pointer"}} onClick={()=>setEditingProduct(null)}>Cancel</button>
+          <button style={{flex:1,background:"#FAF7F0",color:"#8B1A0F",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer"}} onClick={()=>saveEditProduct(editingProduct.pid,editingProduct.prod)}>Save</button>
         </div>
       </div>
     </div>}
@@ -1561,6 +1599,62 @@ function App() {
     {mod.recur&&<RecurModal initial={mod.recur.data} onClose={()=>setMod(m=>({...m,recur:null}))} onSave={r=>{updGoal(mod.recur.gid_,g=>({...g,recurring:{...r,lastApplied:today()}}),mod.recur.pid);setMod(m=>({...m,recur:null}));toast_("Recurring saved ✦");}}/>}
     {mod.report&&<ReportModal content={mod.report.content} type={mod.report.type} onClose={()=>setMod(m=>({...m,report:null}))} onDownload={()=>{dlReport(mod.report.type,db);setMod(m=>({...m,report:null}));}}/>}
 
+
+      {/* ── PRODUCT DETAIL MODAL ── */}
+      {viewProduct&&(()=>{
+        const proj=db.projects.find(p=>p.id===viewProduct.pid);
+        const allEntries=(proj&&proj.goals||[]).flatMap(g=>g.entries||[]);
+        // Group by date
+        const byDate={};
+        allEntries.forEach(e=>{
+          if(!e.units) return;
+          const d=e.date;
+          if(!byDate[d]) byDate[d]={date:d,units:0,revenue:0,sources:{}};
+          byDate[d].units+=Number(e.units||0);
+          byDate[d].revenue+=Number(e.amount||0);
+          byDate[d].sources[e.source||"Cash"]=(byDate[d].sources[e.source||"Cash"]||0)+Number(e.amount||0);
+        });
+        const rows=Object.values(byDate).sort((a,b)=>b.date.localeCompare(a.date));
+        const totalUnits=rows.reduce((s,r)=>s+r.units,0);
+        const totalRev=rows.reduce((s,r)=>s+r.revenue,0);
+        return <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.92)",zIndex:400,display:"flex",flexDirection:"column",fontFamily:"'DM Mono','Courier New',monospace"}}>
+          <div style={{background:"#8B1A0F",padding:"14px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:"1px solid rgba(250,247,240,0.2)"}}>
+            <div>
+              <div style={{fontSize:16,fontWeight:700,letterSpacing:2,color:"#FAF7F0"}}>{viewProduct.name}</div>
+              <div style={{fontSize:11,color:"#FAD5C8",marginTop:2}}>{totalUnits} pairs · {fmtGBP(totalRev)}</div>
+            </div>
+            <button style={{background:"none",border:"none",color:"#FAF7F0",fontSize:22,cursor:"pointer"}} onClick={()=>setViewProduct(null)}>×</button>
+          </div>
+          <div style={{flex:1,overflowY:"auto",padding:14}}>
+            {rows.length===0
+              ?<div style={{color:"#FAD5C8",textAlign:"center",padding:"40px 0",fontSize:13}}>No sales data yet</div>
+              :<>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:16}}>
+                  {[{l:"Total Pairs",v:totalUnits+" pairs"},{l:"Total Revenue",v:fmtGBP(totalRev)},{l:"Avg/Day",v:fmtGBP(rows.length>0?totalRev/rows.length:0)}].map(({l,v})=>(
+                    <div key={l} style={{background:"#A02218",borderRadius:10,padding:"12px",textAlign:"center"}}>
+                      <div style={{fontSize:10,color:"#FAD5C8",marginBottom:4,letterSpacing:1}}>{l.toUpperCase()}</div>
+                      <div style={{fontSize:15,fontWeight:700,color:"#FAF7F0"}}>{v}</div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{fontSize:10,letterSpacing:2,color:"#FAD5C8",textTransform:"uppercase",marginBottom:8}}>Daily Sales</div>
+                {rows.map(r=>(
+                  <div key={r.date} style={{background:"#A02218",borderRadius:8,padding:"10px 12px",marginBottom:4,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                    <div>
+                      <div style={{fontSize:13,fontWeight:600,color:"#FAF7F0"}}>{new Date(r.date+"T00:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"2-digit",month:"short"})}</div>
+                      <div style={{fontSize:10,color:"#FAD5C8",marginTop:2}}>{Object.entries(r.sources).map(([s,v])=>`${s}: ${fmtGBP(v)}`).join(" · ")}</div>
+                    </div>
+                    <div style={{textAlign:"right"}}>
+                      <div style={{fontSize:14,fontWeight:700,color:"#FAF7F0"}}>{fmtGBP(r.revenue)}</div>
+                      <div style={{fontSize:11,color:"#FAD5C8"}}>{r.units} pairs</div>
+                    </div>
+                  </div>
+                ))}
+              </>
+            }
+          </div>
+        </div>;
+      })()}
 
       {/* ── POS SALE MODAL ── */}
       {posMode&&selProj&&(()=>{
