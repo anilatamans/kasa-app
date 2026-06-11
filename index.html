@@ -1357,7 +1357,16 @@ function App() {
     setMod(m=>({...m, editEntry:null}));
     toast_("Entry moved ✦");
   }
-  function saveEditExp(pid,exp){setDb(d=>({...d,projects:d.projects.map(p=>p.id===pid?{...p,expenses:(p.expenses||[]).map(e=>e.id===exp.id?{...exp,amount:parseFloat(exp.amount)}:e)}:p)}));setEditingExp(null);tip("Expense updated ✦");}  function delProd(pid,prodId){setDb(d=>({...d,projects:d.projects.map(p=>p.id===pid?{...p,products:(p.products||[]).filter(pr=>pr.id!==prodId)}:p)}));db_.delete('products',prodId).catch(console.error);toast_("Deleted");}
+  function saveEditExp(pid,exp,gid_=null){
+    const updated={...exp,amount:parseFloat(exp.amount)};
+    if(gid_){
+      updGoal(gid_,g=>({...g,expenses:(g.expenses||[]).map(e=>e.id===exp.id?updated:e)}),pid);
+    } else {
+      setDb(d=>({...d,projects:d.projects.map(p=>p.id===pid?{...p,expenses:(p.expenses||[]).map(e=>e.id===exp.id?updated:e)}:p)}));
+    }
+    db_.update("expenses",exp.id,{name:exp.name,amount:parseFloat(exp.amount),category:exp.category||"Other",freq:exp.freq||"monthly",start_date:exp.startDate||null,note:exp.note||null}).catch(e=>console.error("Expense update failed:",e));
+    setEditingExp(null);toast_("Expense updated ✦");
+  }  function delProd(pid,prodId){setDb(d=>({...d,projects:d.projects.map(p=>p.id===pid?{...p,products:(p.products||[]).filter(pr=>pr.id!==prodId)}:p)}));db_.delete('products',prodId).catch(console.error);toast_("Deleted");}
 
   const allPG = db.projects.flatMap(p=>p.goals||[]);
   const allG = [...allPG,...db.goals];
@@ -1733,7 +1742,10 @@ function App() {
           <button style={{background:"#FAF7F0",color:"#C0392B",border:"none",borderRadius:6,padding:"5px 10px",fontSize:13,fontWeight:700,cursor:"pointer"}} onClick={()=>{setGForm(EG());setView("newGoal");}}>+ Goal</button>
           <button style={{background:"none",border:"1px solid #222",color:"#FAF7F0",borderRadius:6,padding:"5px 8px",fontSize:12,cursor:"pointer"}} onClick={()=>goEntry({projectId:sel.pid})}>+ Income</button>
         </>}
-        {view==="goal"&&<button style={{background:"#FAF7F0",color:"#C0392B",border:"none",borderRadius:6,padding:"5px 10px",fontSize:13,fontWeight:700,cursor:"pointer"}} onClick={()=>goEntry({goalId:sel.gid_,projectId:sel.pid})}>+ Income</button>}
+        {view==="goal"&&selGoal&&!selGoal._general&&<>
+          <button style={{background:"#FAF7F0",color:"#C0392B",border:"none",borderRadius:6,padding:"5px 10px",fontSize:13,fontWeight:700,cursor:"pointer"}} onClick={()=>goEntry({goalId:sel.gid_,projectId:sel.pid})}>+ Income</button>
+          <button style={{background:"rgba(250,247,240,0.15)",color:"#FAF7F0",border:"1px solid #FAF7F0",borderRadius:6,padding:"5px 10px",fontSize:13,fontWeight:700,cursor:"pointer"}} onClick={()=>{setXForm(EX());setView("newGoalExpense");}}>+ Expense</button>
+        </>}
         <button style={{background:"none",border:"none",color:"#FAD5C8",fontSize:18,cursor:"pointer",padding:"2px 6px",lineHeight:1,marginLeft:4}} onClick={logout} title="Sign out">⏻</button>
       </div>
     </div>
@@ -1866,7 +1878,7 @@ function App() {
           <button style={{...S.btn,marginBottom:11}} onClick={()=>{setPForm(EP());setView("newProduct");}}>+ Add Product</button>
           {(selProj.products||[]).length===0&&<div style={{color:"#FAF7F0",fontSize:14,textAlign:"center",padding:"20px 0"}}>No products yet</div>}
           {(selProj.products||[]).map(pr=>{
-            const sold=allE.filter(e=>(e.productId===pr.id)||(e.note&&e.note.toLowerCase().includes(pr.name.toLowerCase()))).reduce((s,e)=>s+Number(e.units||0),0);
+            const sold=(selProj.products||[]).length===1?allE.reduce((s,e)=>s+Number(e.units||0),0):allE.filter(e=>e.productId===pr.id).reduce((s,e)=>s+Number(e.units||0),0);
             return <div key={pr.id} style={S.entryRow}>
               <div style={{minWidth:56,flexShrink:0}}><div style={{fontSize:13,fontWeight:500,color:"#FAF7F0"}}>{pr.unit}</div><div style={{fontSize:11,color:"#FAF7F0"}}>£{pr.unitCost}</div></div>
               <div style={{flex:1,fontSize:13,fontWeight:500,color:"#FAF7F0"}}>{pr.name}</div>
