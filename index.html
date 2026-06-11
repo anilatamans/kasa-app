@@ -1148,7 +1148,7 @@ function App() {
 
       // Build the nested structure our app expects
       // Helper to build goal hierarchy recursively (up to 4 levels)
-      function buildGoal(g, allGoals, allEntries, depth=0) {
+      function buildGoal(g, allGoals, allExpenses, allEntries, depth=0) {
         return {
           ...g,
           target: Number(g.target||0),
@@ -1157,8 +1157,11 @@ function App() {
             ...e, amount:Number(e.amount), units:Number(e.units||0),
             date: e.date, recurring: e.is_recurring
           })).sort((a,b)=>b.date.localeCompare(a.date)),
+          expenses: (allExpenses||[]).filter(e=>e.goal_id===g.id).map(e=>({
+            ...e, amount:Number(e.amount), startDate:e.start_date, freq:e.freq||'monthly'
+          })),
           subGoals: depth < 3
-            ? allGoals.filter(sg=>sg.parent_id===g.id).map(sg=>buildGoal(sg,allGoals,allEntries,depth+1))
+            ? allGoals.filter(sg=>sg.parent_id===g.id).map(sg=>buildGoal(sg,allGoals,allExpenses,allEntries,depth+1))
             : []
         };
       }
@@ -1178,7 +1181,7 @@ function App() {
         console.log('Project', p.name, 'matched goals:', projGoals.length);
         return {
         ...p,
-        goals: projGoals.map(g=>buildGoal(g,goals||[],entries||[])),
+        goals: projGoals.map(g=>buildGoal(g,goals||[],expenses||[],entries||[])),
         expenses: (expenses||[]).filter(e=>e.project_id===p.id).map(e=>({
           ...e, amount:Number(e.amount),
           startDate: e.start_date, freq: e.freq||'monthly'
@@ -1188,7 +1191,7 @@ function App() {
         }))
       };});
 
-      const indepGoals = (goals||[]).filter(g=>!g.project_id&&!g.parent_id).map(g=>buildGoal(g,goals||[],entries||[]));
+      const indepGoals = (goals||[]).filter(g=>!g.project_id&&!g.parent_id).map(g=>buildGoal(g,goals||[],expenses||[],entries||[]));
 
       console.log('Raw from Supabase - projects:', (projects||[]).length, 'goals:', (goals||[]).length, 'entries:', (entries||[]).length);
       console.log('Built projects:', builtProjects.length, 'with goals:', builtProjects.map(p=>p.goals?.length), 'indep goals:', indepGoals.length);
@@ -1242,7 +1245,7 @@ function App() {
   function addGoal(pid=null, parentGoalId=null) {
     const f=gForm; if(!f.name||!f.target) return;
     const uid=getUserId();
-    const g={id:gid(),name:f.name,target:parseFloat(f.target),category:f.category,period:f.period,dateStart:f.dateStart||null,dateEnd:f.dateEnd||null,entries:[],subGoals:[],createdAt:Date.now(),createdStr:today(),archived:false,recurring:null,parentId:parentGoalId||null};
+    const g={id:gid(),name:f.name,target:parseFloat(f.target),category:f.category,period:f.period,dateStart:f.dateStart||null,dateEnd:f.dateEnd||null,entries:[],expenses:[],subGoals:[],createdAt:Date.now(),createdStr:today(),archived:false,recurring:null,parentId:parentGoalId||null};
     if(pid) setDb(d=>({...d,projects:d.projects.map(p=>p.id===pid?{...p,goals:[...(p.goals||[]),g]}:p)}));
     else setDb(d=>({...d,goals:[...d.goals,g]}));
     if(uid){db_.insert('goals',{id:g.id,user_id:uid,project_id:pid||null,parent_id:parentGoalId||null,name:g.name,target:g.target,category:g.category,period:g.period,date_start:g.dateStart,date_end:g.dateEnd,archived:false}).catch(e=>console.error('Goal save failed:',e));}
@@ -1265,12 +1268,16 @@ function App() {
     }
     setEForm(EE()); setView(sel.gid_?"goal":sel.pid?"project":"dashboard"); toast_("Income added ✦");
   }
-  function addExpense(pid) {
+  function addExpense(pid, goalId=null) {
     if(!xForm.name||!xForm.amount) return;
-    const x={id:gid(),...xForm,amount:parseFloat(xForm.amount)};
-    setDb(d=>({...d,projects:d.projects.map(p=>p.id===pid?{...p,expenses:[...(p.expenses||[]),x]}:p)}));
+    const x={id:gid(),...xForm,amount:parseFloat(xForm.amount),goalId:goalId||null};
+    if(goalId) {
+      updGoal(goalId, g=>({...g,expenses:[...(g.expenses||[]),x]}), pid);
+    } else {
+      setDb(d=>({...d,projects:d.projects.map(p=>p.id===pid?{...p,expenses:[...(p.expenses||[]),x]}:p)}));
+    }
     const uid=getUserId();
-    if(uid){db_.insert('expenses',{id:x.id,user_id:uid,project_id:pid,name:x.name,amount:x.amount,category:x.category||'Other',freq:x.freq||'monthly',start_date:x.startDate||null,note:x.note||null}).catch(e=>console.error('Expense save failed:',e));}
+    if(uid){db_.insert('expenses',{id:x.id,user_id:uid,project_id:pid,goal_id:goalId||null,name:x.name,amount:x.amount,category:x.category||'Other',freq:x.freq||'monthly',start_date:x.startDate||null,note:x.note||null}).catch(e=>console.error('Expense save failed:',e));}
     setXForm(EX()); setView("project"); toast_("Expense added ✦");
   }
   function addProduct(pid) {
@@ -1357,6 +1364,7 @@ function App() {
   function goBack(){
     if(view==="goal"&&sel.pid){setView("project");}
     else if(view==="newSubGoal"){setView("goal");}
+    else if(view==="newGoalExpense"){setView("goal");}
     else if(view==="reports"){setView("dashboard");}
     else if(["project","newProject"].includes(view)){setView("dashboard");setSel({pid:null,gid_:null});}
     else if(["newGoal","newEntry","newExpense","newProduct"].includes(view)){
@@ -1493,7 +1501,7 @@ function App() {
         </div>
         <div style={{display:"flex",gap:8,marginTop:8}}>
           <button style={{flex:1,background:"transparent",border:"1px solid #FAF7F0",color:"#FAF7F0",borderRadius:10,padding:"11px",fontSize:13,cursor:"pointer"}} onClick={()=>setEditingExp(null)}>Cancel</button>
-          <button style={{flex:1,background:"#FAF7F0",color:"#C0392B",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer"}} onClick={()=>saveEditExp(editingExp.pid,editingExp.exp)}>Save</button>
+          <button style={{flex:1,background:"#FAF7F0",color:"#C0392B",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer"}} onClick={()=>saveEditExp(editingExp.pid,editingExp.exp,editingExp.gid_||null)}>Save</button>
         </div>
       </div>
     </div>}
@@ -2002,6 +2010,19 @@ function App() {
         <button style={{...S.btn,opacity:!eForm.amount?0.4:1}} onClick={addEntry}>Save Entry</button>
       </div>;
     })()}
+
+    {/* NEW GOAL EXPENSE */}
+    {view==="newGoalExpense"&&selGoal&&<div style={S.page}>
+      <div style={{fontSize:19,fontWeight:700,marginBottom:6,letterSpacing:1.5}}>Add Expense</div>
+      <div style={{fontSize:12,color:"#FAD5C8",marginBottom:18}}>For: {selGoal.name}</div>
+      <div style={S.field}><label style={S.label}>Name</label><input style={S.input} placeholder="Stall rent, Transport..." value={xForm.name} onChange={e=>setXForm(v=>({...v,name:e.target.value}))}/></div>
+      <div style={S.field}><label style={S.label}>Amount (£)</label><input style={S.input} type="number" placeholder="30" value={xForm.amount} onChange={e=>setXForm(v=>({...v,amount:e.target.value}))}/></div>
+      <div style={S.field}><label style={S.label}>Category</label><div style={S.chipRow}>{["Rent","Storage","Stock","Transport","Platform Fee","Marketing","Utilities","Other"].map(c=><Chip key={c} active={xForm.category===c} color="#FAF7F0" onClick={()=>setXForm(v=>({...v,category:c}))}>{c}</Chip>)}</div></div>
+      <div style={S.field}><label style={S.label}>Frequency</label><div style={S.chipRow}>{["one-off","daily","weekly","monthly"].map(f=><Chip key={f} active={xForm.freq===f} color="#FAF7F0" onClick={()=>setXForm(v=>({...v,freq:f}))}>{f}</Chip>)}</div></div>
+      <div style={S.field}><label style={S.label}>Start Date</label><input style={S.input} type="date" value={xForm.startDate||""} onChange={e=>setXForm(v=>({...v,startDate:e.target.value}))}/></div>
+      <div style={S.field}><label style={S.label}>Note</label><input style={S.input} value={xForm.note||""} onChange={e=>setXForm(v=>({...v,note:e.target.value}))}/></div>
+      <button style={{...S.btn,opacity:(!xForm.name||!xForm.amount)?0.4:1}} onClick={()=>{addExpense(sel.pid,sel.gid_);setView("goal");}}>Add Expense</button>
+    </div>}
 
     {/* NEW EXPENSE */}
     {view==="newExpense"&&selProj&&<div style={S.page}>
