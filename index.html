@@ -571,15 +571,7 @@ function sumGoalTotal(goal) {
   const sub = (goal.subGoals||[]).reduce((s,sg)=>s+sumGoalTotal(sg),0);
   return own + sub;
 }
-function expCost(exp) {
-  const start=new Date((exp.startDate||today())+"T00:00:00");
-  const now=new Date();now.setHours(0,0,0,0);
-  if(exp.freq==="one-off") return Number(exp.amount);
-  if(exp.freq==="daily") return (Math.max(0,Math.ceil((now-start)/86400000))+1)*Number(exp.amount);
-  if(exp.freq==="weekly") return (Math.max(0,Math.floor((now-start)/604800000))+1)*Number(exp.amount);
-  if(exp.freq==="monthly"){let m=0,c=new Date(start);while(c<=now){m++;c.setMonth(c.getMonth()+1);}return m*Number(exp.amount);}
-  return Number(exp.amount);
-}
+  
 function prodCost(prod, entries=[]) {
   return entries.filter(e=>e.productId===prod.id).reduce((s,e)=>s+Number(e.units||0),0)*Number(prod.unitCost||0);
 }
@@ -1055,7 +1047,7 @@ function dlCSV(db) {
 // ── MAIN APP ──
 const EG = () => ({name:"",target:"",category:"sales",period:"monthly",dateStart:"",dateEnd:""});
 const EE = () => ({amount:"",note:"",source:"Cash",goalId:"",projectId:"",date:today(),units:"",productId:null});
-const EX = () => ({name:"",amount:"",category:"Rent",freq:"monthly",startDate:today(),note:""});
+const EX=()=>({name:"",amount:"",category:"Rent",freq:"monthly",startDate:today(),note:"",goalId:null});
 const EP = () => ({name:"",unitCost:"",unit:"pair"});
 
 function App() {
@@ -1207,6 +1199,28 @@ function App() {
       setSyncStatus('error');
     }
   }
+
+  function goalExpTotal(goal) {
+    if(!goal) return 0;
+    return (goal.expenses||[]).reduce((s,x)=>{
+      const start=new Date((x.startDate||x.start_date||today())+"T00:00:00");
+      const now=new Date(); now.setHours(0,0,0,0);
+      if(x.freq==="one-off") return s+Number(x.amount);
+      if(x.freq==="daily") return s+(Math.max(0,Math.ceil((now-start)/86400000))+1)*Number(x.amount);
+      if(x.freq==="weekly") return s+(Math.max(0,Math.floor((now-start)/604800000))+1)*Number(x.amount);
+      if(x.freq==="monthly"){let mc=0,c=new Date(start);while(c<=now){mc++;c.setMonth(c.getMonth()+1);}return s+mc*Number(x.amount);}
+      return s+Number(x.amount);
+    },0);
+  }
+function expCost(exp) {
+  const start=new Date((exp.startDate||today())+"T00:00:00");
+  const now=new Date();now.setHours(0,0,0,0);
+  if(exp.freq==="one-off") return Number(exp.amount);
+  if(exp.freq==="daily") return (Math.max(0,Math.ceil((now-start)/86400000))+1)*Number(exp.amount);
+  if(exp.freq==="weekly") return (Math.max(0,Math.floor((now-start)/604800000))+1)*Number(exp.amount);
+  if(exp.freq==="monthly"){let m=0,c=new Date(start);while(c<=now){m++;c.setMonth(c.getMonth()+1);}return m*Number(exp.amount);}
+  return Number(exp.amount);
+}
 
   function getUserId() {
     try{ return JSON.parse(localStorage.getItem('vault_session')||'{}').user?.id; } catch{ return null; }
@@ -1617,8 +1631,9 @@ function App() {
         const rows=Object.values(byDate).sort((a,b)=>b.date.localeCompare(a.date));
         const totalUnits=rows.reduce((s,r)=>s+r.units,0);
         const totalRev=rows.reduce((s,r)=>s+r.revenue,0);
-        return <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.92)",zIndex:400,display:"flex",flexDirection:"column",fontFamily:"'DM Mono','Courier New',monospace"}}>
-          <div style={{background:"#8B1A0F",padding:"14px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:"1px solid rgba(250,247,240,0.2)"}}>
+        return <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",zIndex:400,display:"flex",alignItems:"center",justifyContent:"center",padding:16,fontFamily:"'DM Mono','Courier New',monospace"}}>
+          <div style={{width:"100%",maxWidth:520,background:"#8B1A0F",borderRadius:16,maxHeight:"88vh",display:"flex",flexDirection:"column",overflow:"hidden"}}>
+          <div style={{background:"#721408",padding:"14px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:"1px solid rgba(250,247,240,0.2)"}}>
             <div>
               <div style={{fontSize:16,fontWeight:700,letterSpacing:2,color:"#FAF7F0"}}>{viewProduct.name}</div>
               <div style={{fontSize:11,color:"#FAD5C8",marginTop:2}}>{totalUnits} pairs · {fmtGBP(totalRev)}</div>
@@ -1653,7 +1668,7 @@ function App() {
               </>
             }
           </div>
-        </div>;
+        </div></div>;
       })()}
 
       {/* ── POS SALE MODAL ── */}
@@ -2191,7 +2206,16 @@ function App() {
       <div style={S.field}><label style={S.label}>Frequency</label><div style={S.chipRow}>{["one-off","daily","weekly","monthly"].map(f=><Chip key={f} active={xForm.freq===f} color="#E07840" onClick={()=>setXForm(v=>({...v,freq:f}))}>{f}</Chip>)}</div></div>
       <div style={S.field}><label style={S.label}>Start Date</label><input style={S.input} type="date" value={xForm.startDate} onChange={e=>setXForm(v=>({...v,startDate:e.target.value}))}/></div>
       <div style={S.field}><label style={S.label}>Note (optional)</label><input style={S.input} placeholder="Notes..." value={xForm.note} onChange={e=>setXForm(v=>({...v,note:e.target.value}))}/></div>
-      <button style={{...S.btn,opacity:(!xForm.name||!xForm.amount)?0.4:1}} onClick={()=>addExpense(sel.pid)}>Add Expense</button>
+      <div style={S.field}>
+        <label style={S.label}>Assign to Goal (optional)</label>
+        <div style={{display:"flex",flexDirection:"column",gap:5}}>
+          <div style={{background:!xForm.goalId?"#FAF7F0":"#721408",border:"1px solid #FAF7F0",borderRadius:8,padding:"9px 12px",fontSize:12,cursor:"pointer",color:!xForm.goalId?"#8B1A0F":"#FAF7F0",fontWeight:!xForm.goalId?700:400}} onClick={()=>setXForm(v=>({...v,goalId:null}))}>📌 Project level (no goal)</div>
+          {sel.pid&&(db.projects.find(p=>p.id===sel.pid)?.goals||[]).filter(g=>!g._general&&!g.archived).map(g=>(
+            <div key={g.id} style={{background:xForm.goalId===g.id?"#FAF7F0":"#721408",border:"1px solid #FAF7F0",borderRadius:8,padding:"9px 12px",fontSize:12,cursor:"pointer",color:xForm.goalId===g.id?"#8B1A0F":"#FAF7F0",fontWeight:xForm.goalId===g.id?700:400}} onClick={()=>setXForm(v=>({...v,goalId:g.id}))}>{g.name}</div>
+          ))}
+        </div>
+      </div>
+      <button style={{...S.btn,opacity:(!xForm.name||!xForm.amount)?0.4:1}} onClick={()=>{addExpense(sel.pid, xForm.goalId||null);}}>Add Expense</button>
     </div>}
 
     {/* NEW PRODUCT */}
