@@ -1522,54 +1522,38 @@ function expCost(exp) {
             ))}
           </div>
         </div>
-        <div style={{display:"flex",gap:8}}>
-          <button style={{flex:1,background:"transparent",border:"1px solid #FAF7F0",color:"#FAF7F0",borderRadius:10,padding:"11px",fontSize:13,cursor:"pointer"}} onClick={()=>setEditingGoal(null)}>Cancel</button>
-          <button style={{flex:1,background:"#FAF7F0",color:"#8B1A0F",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer"}} onClick={()=>saveEditGoal(editingGoal.gid_,editingGoal.pid,{name:editingGoal.name,target:parseFloat(editingGoal.target),category:editingGoal.category,period:editingGoal.period})}>Save</button>
-        </div>
-      </div>
-    </div>}
-    {editingExp&&<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
-      <div style={{background:"#721408",border:"1px solid #FAF7F0",borderRadius:16,padding:20,width:"100%",maxWidth:360,maxHeight:"88vh",overflowY:"auto",color:"#FAF7F0"}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-          <div style={{fontSize:17,fontWeight:700}}>Edit Expense</div>
-          <button style={{background:"none",border:"none",color:"#FAF7F0",fontSize:22,cursor:"pointer"}} onClick={()=>setEditingExp(null)}>×</button>
-        </div>
         <div style={{marginBottom:14}}>
-          <label style={{display:"block",fontSize:11,letterSpacing:1.5,color:"#FAF7F0",textTransform:"uppercase",marginBottom:6,fontWeight:600}}>Name</label>
-          <input style={{width:"100%",background:"#8B1A0F",border:"1px solid #FAF7F0",borderRadius:9,padding:"11px 13px",color:"#FAF7F0",fontSize:14,outline:"none",boxSizing:"border-box"}} value={editingExp.exp.name} onChange={e=>setEditingExp(v=>({...v,exp:{...v.exp,name:e.target.value}}))}/>
-        </div>
-        <div style={{marginBottom:14}}>
-          <label style={{display:"block",fontSize:11,letterSpacing:1.5,color:"#FAF7F0",textTransform:"uppercase",marginBottom:6,fontWeight:600}}>Amount (£)</label>
-          <input type="number" style={{width:"100%",background:"#8B1A0F",border:"1px solid #FAF7F0",borderRadius:9,padding:"11px 13px",color:"#FAF7F0",fontSize:14,outline:"none",boxSizing:"border-box"}} value={editingExp.exp.amount} onChange={e=>setEditingExp(v=>({...v,exp:{...v.exp,amount:e.target.value}}))}/>
-        </div>
-        <div style={{marginBottom:14}}>
-          <label style={{display:"block",fontSize:11,letterSpacing:1.5,color:"#FAF7F0",textTransform:"uppercase",marginBottom:6,fontWeight:600}}>Category</label>
-          <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
-            {["Rent","Storage","Stock","Transport","Platform Fee","Marketing","Utilities","Other"].map(c=>(
-              <div key={c} style={{background:editingExp.exp.category===c?"#FAF7F0":"transparent",border:"1px solid #FAF7F0",borderRadius:7,padding:"6px 10px",fontSize:11,cursor:"pointer",color:editingExp.exp.category===c?"#C0392B":"#FAF7F0",fontWeight:editingExp.exp.category===c?700:400}} onClick={()=>setEditingExp(v=>({...v,exp:{...v.exp,category:c}}))}>{c}</div>
-            ))}
+            <label style={{display:"block",fontSize:11,letterSpacing:1.5,color:"#FAF7F0",textTransform:"uppercase",marginBottom:7,fontWeight:600}}>Move to Goal</label>
+            {(()=>{
+              const proj = editingExp.pid ? db.projects.find(p=>p.id===editingExp.pid) : null;
+              const availGoals = (proj?.goals||[]).filter(g=>!g._general&&!g.archived);
+              if(!availGoals.length) return <div style={{fontSize:12,color:"#FAD5C8"}}>No goals in this project</div>;
+              return <div style={{display:"flex",flexDirection:"column",gap:4,maxHeight:130,overflowY:"auto"}}>
+                <div style={{background:!editingExp.exp.goal_id&&!editingExp.exp.goalId?"rgba(250,247,240,0.2)":"transparent",border:"1px solid rgba(250,247,240,0.3)",borderRadius:7,padding:"7px 10px",fontSize:12,cursor:"pointer",color:"#FAF7F0"}} onClick={()=>setEditingExp(v=>({...v,exp:{...v.exp,goal_id:null,goalId:null}}))}>📌 Project level</div>
+                {availGoals.map(g=>(
+                  <div key={g.id} style={{background:(editingExp.exp.goal_id===g.id||editingExp.exp.goalId===g.id)?"rgba(250,247,240,0.25)":"transparent",border:"1px solid rgba(250,247,240,0.3)",borderRadius:7,padding:"7px 10px",fontSize:12,cursor:"pointer",color:"#FAF7F0"}} onClick={()=>setEditingExp(v=>({...v,exp:{...v.exp,goal_id:g.id,goalId:g.id}}))}>{g.name}</div>
+                ))}
+              </div>;
+            })()}
           </div>
-        </div>
-        <div style={{marginBottom:14}}>
-          <label style={{display:"block",fontSize:11,letterSpacing:1.5,color:"#FAF7F0",textTransform:"uppercase",marginBottom:6,fontWeight:600}}>Frequency</label>
-          <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
-            {["one-off","daily","weekly","monthly"].map(f=>(
-              <div key={f} style={{background:editingExp.exp.freq===f?"#FAF7F0":"transparent",border:"1px solid #FAF7F0",borderRadius:7,padding:"6px 10px",fontSize:11,cursor:"pointer",color:editingExp.exp.freq===f?"#C0392B":"#FAF7F0",fontWeight:editingExp.exp.freq===f?700:400}} onClick={()=>setEditingExp(v=>({...v,exp:{...v.exp,freq:f}}))}>{f}</div>
-            ))}
+          <div style={{display:"flex",gap:8}}>
+            <button style={{flex:1,background:"transparent",border:"1px solid #FAF7F0",color:"#FAF7F0",borderRadius:10,padding:"11px",fontSize:13,cursor:"pointer"}} onClick={()=>setEditingExp(null)}>Cancel</button>
+            <button style={{flex:1,background:"#FAF7F0",color:"#C0392B",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer"}} onClick={()=>{
+              const newGoalId=editingExp.exp.goal_id||editingExp.exp.goalId||null;
+              const oldGoalId=editingExp.gid_||null;
+              if(newGoalId!==oldGoalId){
+                if(oldGoalId){updGoal(oldGoalId,g=>({...g,expenses:(g.expenses||[]).filter(e=>e.id!==editingExp.exp.id)}),editingExp.pid);}
+                else{setDb(d=>({...d,projects:d.projects.map(p=>p.id===editingExp.pid?{...p,expenses:(p.expenses||[]).filter(e=>e.id!==editingExp.exp.id)}:p)}));}
+                const moved={...editingExp.exp,amount:parseFloat(editingExp.exp.amount),goal_id:newGoalId,goalId:newGoalId};
+                if(newGoalId){updGoal(newGoalId,g=>({...g,expenses:[...(g.expenses||[]),moved]}),editingExp.pid);}
+                else{setDb(d=>({...d,projects:d.projects.map(p=>p.id===editingExp.pid?{...p,expenses:[...(p.expenses||[]),moved]}:p)}));}
+                db_.update("expenses",editingExp.exp.id,{goal_id:newGoalId,name:editingExp.exp.name,amount:parseFloat(editingExp.exp.amount),category:editingExp.exp.category||"Other",freq:editingExp.exp.freq||"monthly",start_date:editingExp.exp.startDate||null}).catch(console.error);
+                setEditingExp(null);toast_("Expense updated ✦");
+              } else {
+                saveEditExp(editingExp.pid,editingExp.exp,editingExp.gid_||null);
+              }
+            }}>Save</button>
           </div>
-        </div>
-        <div style={{marginBottom:14}}>
-          <label style={{display:"block",fontSize:11,letterSpacing:1.5,color:"#FAF7F0",textTransform:"uppercase",marginBottom:6,fontWeight:600}}>Start Date</label>
-          <input type="date" style={{width:"100%",background:"#8B1A0F",border:"1px solid #FAF7F0",borderRadius:9,padding:"11px 13px",color:"#FAF7F0",fontSize:14,outline:"none",boxSizing:"border-box"}} value={editingExp.exp.startDate||""} onChange={e=>setEditingExp(v=>({...v,exp:{...v.exp,startDate:e.target.value}}))}/>
-        </div>
-        <div style={{marginBottom:14}}>
-          <label style={{display:"block",fontSize:11,letterSpacing:1.5,color:"#FAF7F0",textTransform:"uppercase",marginBottom:6,fontWeight:600}}>Note</label>
-          <input style={{width:"100%",background:"#8B1A0F",border:"1px solid #FAF7F0",borderRadius:9,padding:"11px 13px",color:"#FAF7F0",fontSize:14,outline:"none",boxSizing:"border-box"}} value={editingExp.exp.note||""} onChange={e=>setEditingExp(v=>({...v,exp:{...v.exp,note:e.target.value}}))}/>
-        </div>
-        <div style={{display:"flex",gap:8,marginTop:8}}>
-          <button style={{flex:1,background:"transparent",border:"1px solid #FAF7F0",color:"#FAF7F0",borderRadius:10,padding:"11px",fontSize:13,cursor:"pointer"}} onClick={()=>setEditingExp(null)}>Cancel</button>
-          <button style={{flex:1,background:"#FAF7F0",color:"#C0392B",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer"}} onClick={()=>saveEditExp(editingExp.pid,editingExp.exp,editingExp.gid_||null)}>Save</button>
-        </div>
       </div>
     </div>}
     {mod.moveGoal&&(()=>{
@@ -2056,8 +2040,11 @@ function expCost(exp) {
               <div style={{fontSize:10,letterSpacing:2,color:"#FAD5C8",textTransform:"uppercase",marginBottom:8}}>Move from project</div>
               {projExps.map(x=>(
                 <div key={x.id} style={{display:"flex",alignItems:"center",gap:8,background:"#721408",padding:"9px 11px",borderRadius:8,marginBottom:4}}>
-                  <div style={{flex:1,fontSize:12,color:"#FAD5C8"}}>{x.name} · {fmtGBP(expCost(x))}</div>
-                  <button style={{background:"rgba(250,247,240,0.15)",border:"1px solid #FAF7F0",color:"#FAF7F0",borderRadius:5,fontSize:11,cursor:"pointer",padding:"4px 10px",fontWeight:600}} onClick={()=>{
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:12,color:"#FAF7F0",fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{x.name}</div>
+                    <div style={{fontSize:10,color:"#FAD5C8",marginTop:1}}>{x.freq==="one-off"?new Date((x.startDate||x.start_date||today())+"T00:00:00").toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"}):x.freq} · {fmtGBP(expCost(x))}</div>
+                  </div>
+                  <button style={{background:"rgba(250,247,240,0.15)",border:"1px solid #FAF7F0",color:"#FAF7F0",borderRadius:5,fontSize:11,cursor:"pointer",padding:"4px 10px",fontWeight:600,flexShrink:0}} onClick={()=>{
                     const moved={...x,goalId:sel.gid_,goal_id:sel.gid_};
                     setDb(d=>({...d,projects:d.projects.map(p=>p.id===sel.pid?{...p,expenses:(p.expenses||[]).filter(e=>e.id!==x.id)}:p)}));
                     updGoal(sel.gid_,g=>({...g,expenses:[...(g.expenses||[]),moved]}),sel.pid);
