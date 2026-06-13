@@ -1244,7 +1244,19 @@ function expCost(exp) {
   const sugg = useSuggestions(db);
 
   const selProj = db.projects.find(p=>p.id===sel.pid);
-  const selGoal = sel.pid ? (selProj&&(selProj.goals||[]).find(g=>g.id===sel.gid_)) : db.goals.find(g=>g.id===sel.gid_);
+  const selGoal = (()=>{
+    if(!sel.gid_) return null;
+    function findGoal(goals) {
+      for(const g of (goals||[])) {
+        if(g.id===sel.gid_) return g;
+        const found = findGoal(g.subGoals||[]);
+        if(found) return found;
+      }
+      return null;
+    }
+    if(sel.pid) return selProj ? findGoal(selProj.goals||[]) : null;
+    return findGoal(db.goals);
+  })();
   const selCfg = selGoal ? (CAT[selGoal.category]||CAT.other) : null;
 
   function updGoalDeep(goals, gid_, fn) {
@@ -1455,7 +1467,15 @@ function expCost(exp) {
   function goGoal(gid_,pid=null){setSel({pid,gid_});setView("goal");setGoalTab("entries");}
   function goEntry(opts={}){setEForm({...EE(),...opts});setView("newEntry");}
   function goBack(){
-    if(view==="goal"&&sel.pid){setView("project");}
+    if(view==="goal"&&sel.pid){
+      // If current goal is a subgoal, go back to parent
+      if(selGoal&&selGoal.parentId) {
+        setSel(s=>({...s,gid_:selGoal.parentId}));
+        setGoalTab("entries");
+      } else {
+        setView("project");
+      }
+    }
     else if(view==="newSubGoal"){setView("goal");}
     else if(view==="newGoalExpense"){setView("goal");}
     else if(view==="reports"){setView("dashboard");}
@@ -1909,7 +1929,7 @@ function expCost(exp) {
         </>}
         {view==="project"&&selProj&&<>
           <button style={{background:"#FAF7F0",color:"#C0392B",border:"none",borderRadius:6,padding:"5px 10px",fontSize:13,fontWeight:700,cursor:"pointer"}} onClick={()=>{setGForm(EG());setView("newGoal");}}>+ Goal</button>
-          <button style={{background:"#5A9E6F",color:"#fff",border:"none",borderRadius:6,padding:"5px 10px",fontSize:13,fontWeight:700,cursor:"pointer"}} onClick={()=>{setPosMode(true);setCart([]);setPosPayment("Cash");setPosNote("");setPosGoalId("");setPosDiscount("");setPosDate(today());}}>🛍 Sale</button>
+          
           <button style={{background:"#5A9E6F",color:"#fff",border:"none",borderRadius:6,padding:"5px 10px",fontSize:13,fontWeight:700,cursor:"pointer"}} onClick={()=>{setPosMode(true);setCart([]);setPosPayment("Cash");setPosNote("");setPosGoalId("");setPosDiscount("");setPosDate(today());}}>🛍 Sale</button>
           <button style={{background:"none",border:"1px solid #222",color:"#FAF7F0",borderRadius:6,padding:"5px 8px",fontSize:12,cursor:"pointer"}} onClick={()=>goEntry({projectId:sel.pid})}>+ Income</button>
         </>}
@@ -2166,7 +2186,7 @@ function expCost(exp) {
           + Add Sub-goal
         </button>
       </div>}
-      {!selGoal._general&&(selGoal.subGoals||[]).length>0&&<SubGoalList goals={selGoal.subGoals} pid={sel.pid} depth={0} onSelect={(gid_,pid)=>{setSel(s=>({...s,gid_,pid}));setGoalTab("entries");setView("goal");}} onAddSub={(parentId)=>{setSel(s=>({...s,gid_:parentId}));setGForm({name:"",target:"0",category:"sales",period:"monthly",dateStart:"",dateEnd:""});setView("newSubGoal");}} onEdit={(sg)=>setEditingGoal({gid_:sg.id,pid:sel.pid,name:sg.name,target:String(sg.target),category:sg.category,period:sg.period})} onDelete={(gid_)=>setMod(m=>({...m,confirm:{msg:"Delete this sub-goal?",onYes:()=>delGoal(gid_,sel.pid)}}))} />}
+      {!selGoal._general&&(selGoal.subGoals||[]).length>0&&<SubGoalList goals={selGoal.subGoals} pid={sel.pid} depth={0} onSelect={(gid_,pid)=>{setSel(s=>({...s,gid_,pid}));setGoalTab("entries");setView("goal");}} onAddSub={(parentId)=>{setSel(s=>({...s,gid_:parentId}));setGForm({name:"",target:"0",category:"sales",period:"monthly",dateStart:"",dateEnd:""});setView("newSubGoal");}} onEdit={(sg)=>setEditingGoal({gid_:sg.id,pid:sel.pid,name:sg.name,target:String(sg.target),category:sg.category,period:sg.period})} onDelete={(gid_)=>setMod(m=>({...m,confirm:{text:"Delete this sub-goal?",fn:()=>delGoal(gid_,sel.pid)}}))} />}
       {!selGoal._general&&<div style={{display:"flex",gap:7,marginTop:22}}>
         <button style={S.btnGhost} onClick={()=>setEditingGoal({gid_:selGoal.id,pid:sel.pid,name:selGoal.name,target:String(selGoal.target),category:selGoal.category,period:selGoal.period})}>Edit</button>
         <button style={S.btnGhost} onClick={()=>setMod(m=>({...m,moveGoal:{goalId:selGoal.id,pid:sel.pid}}))}>Move</button>
