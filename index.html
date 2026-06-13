@@ -1077,6 +1077,7 @@ function App() {
   const [editingProj, setEditingProj] = useState(null);
   const [editingGoal, setEditingGoal] = useState(null);
   const [editingProduct, setEditingProduct] = useState(null);
+  const [importRef] = useState(()=>({current:null}));
   const [viewProduct, setViewProduct] = useState(null); // {productId, pid}
   const [editingExp, setEditingExp] = useState(null);
 
@@ -1385,7 +1386,48 @@ function expCost(exp) {
       db_.update("expenses",exp.id,{name:exp.name,amount:parseFloat(exp.amount),category:exp.category||"Other",freq:exp.freq||"monthly",start_date:exp.startDate||null,note:exp.note||null}).then(()=>toast_("Expense updated ✦")).catch(e=>{console.error("Expense update failed:",e);toast_("Saved locally");});
       setEditingExp(null);
     } catch(e){ console.error(e); setEditingExp(null); }
-  }  function saveEditProduct(pid, prod) {
+  }  function downloadProductTemplate() {
+    const csv = "name,unit_cost,unit,is_premium\nAnkle Socks,1,pair,false\nPremium Merino,2,pair,true";
+    const blob = new Blob([csv], {type:"text/csv"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "kasa_products_template.csv"; a.click();
+    URL.revokeObjectURL(url);
+  }
+  function importProductsCSV(file, pid) {
+    const uid = getUserId();
+    if(!file||!pid||!uid) return;
+    const reader = new FileReader();
+    reader.onload = e => {
+      const lines = e.target.result.split("\n").filter(l=>l.trim());
+      const header = lines[0].toLowerCase().split(",").map(h=>h.trim());
+      const nameIdx = header.indexOf("name");
+      const costIdx = header.indexOf("unit_cost");
+      const unitIdx = header.indexOf("unit");
+      const premIdx = header.indexOf("is_premium");
+      if(nameIdx<0||costIdx<0) { toast_("Invalid CSV — need name and unit_cost columns"); return; }
+      let added = 0;
+      const newProds = [];
+      lines.slice(1).forEach(line => {
+        const cols = line.split(",").map(c=>c.trim().replace(/^"|"$/g,""));
+        const name = cols[nameIdx];
+        const cost = parseFloat(cols[costIdx]||"0");
+        const unit = unitIdx>=0 ? cols[unitIdx]||"pair" : "pair";
+        const isPrem = premIdx>=0 ? cols[premIdx].toLowerCase()==="true" : false;
+        if(!name) return;
+        const pr = {id:gid(),name,unitCost:cost,unit,isPremium:isPrem,unit_cost:cost,is_premium:isPrem};
+        newProds.push(pr);
+        db_.insert("products",{id:pr.id,user_id:uid,project_id:pid,name,unit_cost:cost,unit,is_premium:isPrem}).catch(console.error);
+        added++;
+      });
+      if(newProds.length) {
+        setDb(d=>({...d,projects:d.projects.map(p=>p.id===pid?{...p,products:[...(p.products||[]),...newProds]}:p)}));
+        toast_(`${added} products imported ✦`);
+      }
+    };
+    reader.readAsText(file);
+  }
+  function saveEditProduct(pid, prod) {
     setDb(d=>({...d,projects:d.projects.map(p=>p.id===pid?{...p,products:(p.products||[]).map(pr=>pr.id===prod.id?{...prod,unitCost:parseFloat(prod.unitCost)}:pr)}:p)}));
     db_.update('products',prod.id,{name:prod.name,unit_cost:parseFloat(prod.unitCost),unit:prod.unit||'pair',is_premium:prod.isPremium||false}).catch(console.error);
     setEditingProduct(null);
@@ -1849,6 +1891,7 @@ function expCost(exp) {
         </>}
         {view==="project"&&selProj&&<>
           <button style={{background:"#FAF7F0",color:"#C0392B",border:"none",borderRadius:6,padding:"5px 10px",fontSize:13,fontWeight:700,cursor:"pointer"}} onClick={()=>{setGForm(EG());setView("newGoal");}}>+ Goal</button>
+          <button style={{background:"#5A9E6F",color:"#fff",border:"none",borderRadius:6,padding:"5px 10px",fontSize:13,fontWeight:700,cursor:"pointer"}} onClick={()=>{setPosMode(true);setCart([]);setPosPayment("Cash");setPosNote("");setPosGoalId("");setPosDiscount("");}}>🛍 Sale</button>
           <button style={{background:"none",border:"1px solid #222",color:"#FAF7F0",borderRadius:6,padding:"5px 8px",fontSize:12,cursor:"pointer"}} onClick={()=>goEntry({projectId:sel.pid})}>+ Income</button>
         </>}
         {view==="goal"&&selGoal&&!selGoal._general&&<>
@@ -1984,7 +2027,12 @@ function expCost(exp) {
           {(selProj.expenses||[]).length>0&&<div style={{marginTop:9,padding:"9px 11px",background:"#B02A1E",borderRadius:8,display:"flex",justifyContent:"space-between"}}><span style={{fontSize:13,fontWeight:500,color:"#FAF7F0"}}>Total</span><span style={{fontSize:15,fontWeight:700,color:"#E07840"}}>{fmtGBP(ec)}</span></div>}
         </>}
         {projTab==="products"&&<>
-          <button style={{...S.btn,marginBottom:11}} onClick={()=>{setPForm(EP());setView("newProduct");}}>+ Add Product</button>
+          <div style={{display:"flex",gap:8,marginBottom:11}}>
+            <button style={{...S.btn,flex:1}} onClick={()=>{setPForm(EP());setView("newProduct");}}>+ Add Product</button>
+            <button style={{background:"transparent",border:"1px solid #FAF7F0",color:"#FAF7F0",borderRadius:10,padding:"11px 14px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}} onClick={downloadProductTemplate}>↓ Template</button>
+            <button style={{background:"transparent",border:"1px solid #FAF7F0",color:"#FAF7F0",borderRadius:10,padding:"11px 14px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}} onClick={()=>importRef.current&&importRef.current.click()}>↑ Import</button>
+          </div>
+          <input ref={el=>importRef.current=el} type="file" accept=".csv" style={{display:"none"}} onChange={e=>{const f=e.target.files[0];if(f){importProductsCSV(f,selProj.id);e.target.value="";}}}/>
           {(selProj.products||[]).length===0&&<div style={{color:"#FAF7F0",fontSize:14,textAlign:"center",padding:"20px 0"}}>No products yet</div>}
           {(selProj.products||[]).map(pr=>{
             const sold=(selProj.products||[]).length===1?allE.reduce((s,e)=>s+Number(e.units||0),0):allE.filter(e=>e.productId===pr.id).reduce((s,e)=>s+Number(e.units||0),0);
