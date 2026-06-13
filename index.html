@@ -7,8 +7,8 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="KASA">
 <meta name="theme-color" content="#8B1A0F">
-<link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%238B1A0F'/><text y='.9em' font-size='72' x='50%' text-anchor='middle' font-family='Georgia,serif' fill='%23FAF7F0' font-weight='bold'>V</text></svg>">
-<link rel="manifest" href="data:application/json,{&quot;name&quot;:&quot;KASA&quot;,&quot;short_name&quot;:&quot;KASA&quot;,&quot;start_url&quot;:&quot;.&quot;,&quot;display&quot;:&quot;standalone&quot;,&quot;background_color&quot;:&quot;%238B1A0F&quot;,&quot;theme_color&quot;:&quot;%238B1A0F&quot;,&quot;icons&quot;:[{&quot;src&quot;:&quot;data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%238B1A0F'/><text y='.9em' font-size='72' x='50%25' text-anchor='middle' font-family='Georgia,serif' fill='%23FAF7F0' font-weight='bold'>V</text></svg>&quot;,&quot;sizes&quot;:&quot;192x192&quot;,&quot;type&quot;:&quot;image/svg+xml&quot;}]}">
+<link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%238B1A0F'/><text y='72' font-size='68' x='50' text-anchor='middle' text-anchor='middle' font-family='Georgia,serif' fill='%23FAF7F0' font-weight='bold'>K</text></svg>">
+<link rel="manifest" href="data:application/json,{&quot;name&quot;:&quot;KASA&quot;,&quot;short_name&quot;:&quot;KASA&quot;,&quot;start_url&quot;:&quot;.&quot;,&quot;display&quot;:&quot;standalone&quot;,&quot;background_color&quot;:&quot;%238B1A0F&quot;,&quot;theme_color&quot;:&quot;%238B1A0F&quot;,&quot;icons&quot;:[{&quot;src&quot;:&quot;data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%238B1A0F'/><text y='.9em' font-size='72' x='50%25' text-anchor='middle' font-family='Georgia,serif' fill='%23FAF7F0' font-weight='bold'>K</text></svg>&quot;,&quot;sizes&quot;:&quot;192x192&quot;,&quot;type&quot;:&quot;image/svg+xml&quot;}]}">
 <title>KASA</title>
 <title>KASA</title>
 <script>/**
@@ -691,7 +691,7 @@ function AmountQuick({amounts, onSelect}) {
 
 
 // ── Recursive SubGoal List (up to 4 levels) ──────────────────
-function SubGoalList({goals=[], pid, depth=0, onSelect, onAddSub}) {
+function SubGoalList({goals=[], pid, depth=0, onSelect, onAddSub, onEdit, onDelete}) {
   if(!goals.length) return null;
   const maxDepth = 3; // 0-indexed so 0,1,2,3 = 4 levels
   const indent = depth * 12;
@@ -723,16 +723,26 @@ function SubGoalList({goals=[], pid, depth=0, onSelect, onAddSub}) {
               <PBar pct={sPct} color={sgCfg.color} h={3}/>
               <div style={{display:"flex",justifyContent:"space-between",marginTop:5}}>
                 <span style={{fontSize:9,color:"#FAD5C8"}}>{sPct.toFixed(0)}% · {daysLeft(sg)}d left</span>
-                {depth < maxDepth && (
+                <div style={{display:"flex",gap:4}}>
+                  {depth < maxDepth && (
+                    <span style={{fontSize:9,color:"#FAD5C8",cursor:"pointer",padding:"2px 6px",border:"1px solid rgba(250,247,240,0.3)",borderRadius:4}}
+                      onClick={e=>{e.stopPropagation();onAddSub(sg.id);}}>
+                      + sub
+                    </span>
+                  )}
                   <span style={{fontSize:9,color:"#FAD5C8",cursor:"pointer",padding:"2px 6px",border:"1px solid rgba(250,247,240,0.3)",borderRadius:4}}
-                    onClick={e=>{e.stopPropagation();onAddSub(sg.id);}}>
-                    + sub-goal
+                    onClick={e=>{e.stopPropagation();onEdit(sg);}}>
+                    edit
                   </span>
-                )}
+                  <span style={{fontSize:9,color:"#F87171",cursor:"pointer",padding:"2px 6px",border:"1px solid rgba(248,113,113,0.4)",borderRadius:4}}
+                    onClick={e=>{e.stopPropagation();onDelete(sg.id);}}>
+                    ✕
+                  </span>
+                </div>
               </div>
             </div>
             {hasChildren&&(
-              <SubGoalList goals={sg.subGoals} pid={pid} depth={depth+1} onSelect={onSelect} onAddSub={onAddSub}/>
+              <SubGoalList goals={sg.subGoals} pid={pid} depth={depth+1} onSelect={onSelect} onAddSub={onAddSub} onEdit={onEdit} onDelete={onDelete}/>
             )}
           </div>
         );
@@ -1070,6 +1080,7 @@ function App() {
   const [posNote, setPosNote] = useState("");
   const [posGoalId, setPosGoalId] = useState("");
   const [posDiscount, setPosDiscount] = useState("");
+  const [posDate, setPosDate] = useState("");
   function logout() {
     localStorage.removeItem('vault_session');
     window.location.reload();
@@ -1744,7 +1755,7 @@ function expCost(exp) {
           const noteStr = posNote || cart.map(i=>`${i.qty}x ${i.name}`).join(", ");
           const entry = {
             id:gid(), amount:finalTotal, note:noteStr,
-            source:posPayment, date:today(), ts:Date.now(),
+            source:posPayment, date:posDate||today(), ts:Date.now(),
             units:totalUnits, productId:null,
             cartItems: cart.map(i=>({productId:i.productId,name:i.name,qty:i.qty,price:calcSockPrice(i.qty,i.isPremium)}))
           };
@@ -1766,9 +1777,10 @@ function expCost(exp) {
         }
 
         return (
-          <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.92)",zIndex:400,display:"flex",flexDirection:"column",fontFamily:"'DM Mono','Courier New',monospace"}}>
+          <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",zIndex:400,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'DM Mono','Courier New',monospace"}}>
+            <div style={{width:"100%",maxWidth:520,background:"#8B1A0F",borderRadius:16,maxHeight:"92vh",display:"flex",flexDirection:"column",overflow:"hidden"}}>
             {/* Header */}
-            <div style={{background:"#8B1A0F",padding:"14px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:"1px solid rgba(250,247,240,0.2)"}}>
+            <div style={{background:"#721408",padding:"14px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:"1px solid rgba(250,247,240,0.2)"}}>
               <span style={{fontSize:16,fontWeight:700,letterSpacing:3,color:"#FAF7F0"}}>NEW SALE</span>
               <button style={{background:"none",border:"none",color:"#FAF7F0",fontSize:22,cursor:"pointer"}} onClick={()=>setPosMode(false)}>×</button>
             </div>
@@ -1833,6 +1845,11 @@ function expCost(exp) {
                 </div>
               </>}
 
+              {/* Date */}
+              <div style={{marginBottom:10}}>
+                <div style={{fontSize:10,letterSpacing:2,color:"#FAD5C8",textTransform:"uppercase",marginBottom:8}}>Date</div>
+                <input type="date" value={posDate||today()} onChange={e=>setPosDate(e.target.value)} style={{width:"100%",background:"#721408",border:"1px solid rgba(250,247,240,0.3)",borderRadius:9,padding:"10px 13px",color:"#FAF7F0",fontSize:13,outline:"none",boxSizing:"border-box",fontFamily:"inherit"}}/>
+              </div>
               {/* Payment + Goal */}
               <div style={{marginBottom:10}}>
                 <div style={{fontSize:10,letterSpacing:2,color:"#FAD5C8",textTransform:"uppercase",marginBottom:8}}>Payment</div>
@@ -1872,6 +1889,7 @@ function expCost(exp) {
               </button>
             </div>
           </div>
+            </div>
         );
       })()}
 
@@ -1891,7 +1909,8 @@ function expCost(exp) {
         </>}
         {view==="project"&&selProj&&<>
           <button style={{background:"#FAF7F0",color:"#C0392B",border:"none",borderRadius:6,padding:"5px 10px",fontSize:13,fontWeight:700,cursor:"pointer"}} onClick={()=>{setGForm(EG());setView("newGoal");}}>+ Goal</button>
-          <button style={{background:"#5A9E6F",color:"#fff",border:"none",borderRadius:6,padding:"5px 10px",fontSize:13,fontWeight:700,cursor:"pointer"}} onClick={()=>{setPosMode(true);setCart([]);setPosPayment("Cash");setPosNote("");setPosGoalId("");setPosDiscount("");}}>🛍 Sale</button>
+          <button style={{background:"#5A9E6F",color:"#fff",border:"none",borderRadius:6,padding:"5px 10px",fontSize:13,fontWeight:700,cursor:"pointer"}} onClick={()=>{setPosMode(true);setCart([]);setPosPayment("Cash");setPosNote("");setPosGoalId("");setPosDiscount("");setPosDate(today());}}>🛍 Sale</button>
+          <button style={{background:"#5A9E6F",color:"#fff",border:"none",borderRadius:6,padding:"5px 10px",fontSize:13,fontWeight:700,cursor:"pointer"}} onClick={()=>{setPosMode(true);setCart([]);setPosPayment("Cash");setPosNote("");setPosGoalId("");setPosDiscount("");setPosDate(today());}}>🛍 Sale</button>
           <button style={{background:"none",border:"1px solid #222",color:"#FAF7F0",borderRadius:6,padding:"5px 8px",fontSize:12,cursor:"pointer"}} onClick={()=>goEntry({projectId:sel.pid})}>+ Income</button>
         </>}
         {view==="goal"&&selGoal&&!selGoal._general&&<>
@@ -2147,7 +2166,7 @@ function expCost(exp) {
           + Add Sub-goal
         </button>
       </div>}
-      {!selGoal._general&&(selGoal.subGoals||[]).length>0&&<SubGoalList goals={selGoal.subGoals} pid={sel.pid} depth={0} onSelect={(gid_,pid)=>{setSel(s=>({...s,gid_,pid}));setGoalTab("entries");}} onAddSub={(parentId)=>{setSel(s=>({...s,gid_:parentId}));setGForm({name:"",target:"0",category:"sales",period:"monthly",dateStart:"",dateEnd:""});setView("newSubGoal");}}/>}
+      {!selGoal._general&&(selGoal.subGoals||[]).length>0&&<SubGoalList goals={selGoal.subGoals} pid={sel.pid} depth={0} onSelect={(gid_,pid)=>{setSel(s=>({...s,gid_,pid}));setGoalTab("entries");setView("goal");}} onAddSub={(parentId)=>{setSel(s=>({...s,gid_:parentId}));setGForm({name:"",target:"0",category:"sales",period:"monthly",dateStart:"",dateEnd:""});setView("newSubGoal");}} onEdit={(sg)=>setEditingGoal({gid_:sg.id,pid:sel.pid,name:sg.name,target:String(sg.target),category:sg.category,period:sg.period})} onDelete={(gid_)=>setMod(m=>({...m,confirm:{msg:"Delete this sub-goal?",onYes:()=>delGoal(gid_,sel.pid)}}))} />}
       {!selGoal._general&&<div style={{display:"flex",gap:7,marginTop:22}}>
         <button style={S.btnGhost} onClick={()=>setEditingGoal({gid_:selGoal.id,pid:sel.pid,name:selGoal.name,target:String(selGoal.target),category:selGoal.category,period:selGoal.period})}>Edit</button>
         <button style={S.btnGhost} onClick={()=>setMod(m=>({...m,moveGoal:{goalId:selGoal.id,pid:sel.pid}}))}>Move</button>
