@@ -334,7 +334,7 @@ const SUPABASE_URL = "https://zqzitszozhxqmkdeeshj.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inpxeml0c3pvemh4cW1rZGVlc2hqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwMTgxNDQsImV4cCI6MjA5NjU5NDE0NH0.2jRByYtxynBoxIri1w3ovJTL-u62t3qramojERsDcd8";
 
 async function sbFetch(path, options={}) {
-  const session = JSON.parse(localStorage.getItem('vault_session') || 'null');
+  const session = JSON.parse(localStorage.getItem('kasa_session') || 'null');
   const headers = {
     'apikey': SUPABASE_KEY,
     'Content-Type': 'application/json',
@@ -412,7 +412,7 @@ function AuthScreen({onLogin}) {
   const [loading, setLoading] = useState(false);
   const [showPwd, setShowPwd] = useState(false);
   const [showSug, setShowSug] = useState(false);
-  const savedEmails = (()=>{try{return JSON.parse(localStorage.getItem('vault_emails')||'[]');}catch{return [];}})();
+  const savedEmails = (()=>{try{return JSON.parse(localStorage.getItem('kasa_emails')||'[]');}catch{return [];}})();
 
   async function handleSubmit() {
     if(!email || !password) { setError('Please fill all fields'); return; }
@@ -423,9 +423,9 @@ function AuthScreen({onLogin}) {
       if(data.error || data.error_description) {
         setError(data.error_description || data.error);
       } else if(data.access_token) {
-        localStorage.setItem('vault_session', JSON.stringify(data));
+        localStorage.setItem('kasa_session', JSON.stringify(data));
         // Save email for suggestions
-        try{const emails=JSON.parse(localStorage.getItem('vault_emails')||'[]');if(!emails.includes(email)){emails.unshift(email);localStorage.setItem('vault_emails',JSON.stringify(emails.slice(0,5)));}}catch{}
+        try{const emails=JSON.parse(localStorage.getItem('kasa_emails')||'[]');if(!emails.includes(email)){emails.unshift(email);localStorage.setItem('kasa_emails',JSON.stringify(emails.slice(0,5)));}}catch{}
         onLogin(data);
       } else if(mode === 'register') {
         setError('Check your email to confirm your account, then log in.');
@@ -1036,14 +1036,14 @@ function genReport(type, db) {
 }
 function dlReport(type, db) {
   const c=genReport(type,db);
-  const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([c],{type:"text/plain"}));a.download=`vault_${type}.txt`;a.click();
+  const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([c],{type:"text/plain"}));a.download=`kasa_${type}.txt`;a.click();
 }
 function dlCSV(db) {
   const rows=[["Project","Goal","Date","Amount","Source","Cash","Note","Recurring"]];
   db.projects.forEach(p=>(p.goals||[]).forEach(g=>(g.entries||[]).forEach(e=>rows.push([p.name,g.name,e.date,e.amount,e.source||"",e.source==="Cash"?"Yes":"No",e.note||"",e.recurring?"Yes":"No"]))));
   db.goals.forEach(g=>(g.entries||[]).forEach(e=>rows.push(["—",g.name,e.date,e.amount,e.source||"",e.source==="Cash"?"Yes":"No",e.note||"",e.recurring?"Yes":"No"])));
   const csv=rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
-  const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download="vault.csv";a.click();
+  const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download="kasa.csv";a.click();
 }
 
 
@@ -1222,7 +1222,7 @@ function App() {
   const [posDate, setPosDate] = useState("");
   const [posModelLines, setPosModelLines] = useState({});
   function logout() {
-    localStorage.removeItem('vault_session');
+    localStorage.removeItem('kasa_session');
     window.location.reload();
   }
   const [editingProj, setEditingProj] = useState(null);
@@ -1233,7 +1233,7 @@ function App() {
   const [editingExp, setEditingExp] = useState(null);
 
   const [session, setSession] = useState(()=>{
-    try{ return JSON.parse(localStorage.getItem('vault_session')||'null'); } catch{ return null; }
+    try{ return JSON.parse(localStorage.getItem('kasa_session')||'null'); } catch{ return null; }
   });
   const [syncStatus, setSyncStatus] = useState('idle'); // idle | syncing | error
 
@@ -1375,7 +1375,7 @@ function expCost(exp) {
 }
 
   function getUserId() {
-    try{ return JSON.parse(localStorage.getItem('vault_session')||'{}').user?.id; } catch{ return null; }
+    try{ return JSON.parse(localStorage.getItem('kasa_session')||'{}').user?.id; } catch{ return null; }
   }
 
   useEffect(()=>{if(toast){const t=setTimeout(()=>setToast(null),2500);return()=>clearTimeout(t);}},[toast]);
@@ -2497,16 +2497,16 @@ function expCost(exp) {
 function Root() {
   const [session, setSession] = useState(()=>{
     try{ 
-      const s = JSON.parse(localStorage.getItem('vault_session')||'null');
+      const s = JSON.parse(localStorage.getItem('kasa_session')||'null');
       // Check if session has expired
       if(s && s.expires_at && s.expires_at < Date.now()/1000) {
-        localStorage.removeItem('vault_session');
+        localStorage.removeItem('kasa_session');
         return null;
       }
       return s;
     } catch{ return null; }
   });
-  if(!session) return <AuthScreen onLogin={s=>{localStorage.setItem('vault_session',JSON.stringify(s));setSession(s);}}/>;
+  if(!session) return <AuthScreen onLogin={s=>{localStorage.setItem('kasa_session',JSON.stringify(s));setSession(s);}}/>;
   return <App key={session.user?.id}/>;
 }
 ReactDOM.createRoot(document.getElementById('root')).render(<Root/>);
