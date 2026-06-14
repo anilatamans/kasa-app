@@ -7,8 +7,8 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="KASA">
 <meta name="theme-color" content="#8B1A0F">
-<link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%238B1A0F'/><text y='.9em' font-size='72' x='50%' text-anchor='middle' font-family='Georgia,serif' fill='%23FAF7F0' font-weight='bold'>V</text></svg>">
-<link rel="manifest" href="data:application/json,{&quot;name&quot;:&quot;KASA&quot;,&quot;short_name&quot;:&quot;KASA&quot;,&quot;start_url&quot;:&quot;.&quot;,&quot;display&quot;:&quot;standalone&quot;,&quot;background_color&quot;:&quot;%238B1A0F&quot;,&quot;theme_color&quot;:&quot;%238B1A0F&quot;,&quot;icons&quot;:[{&quot;src&quot;:&quot;data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%238B1A0F'/><text y='.9em' font-size='72' x='50%25' text-anchor='middle' font-family='Georgia,serif' fill='%23FAF7F0' font-weight='bold'>V</text></svg>&quot;,&quot;sizes&quot;:&quot;192x192&quot;,&quot;type&quot;:&quot;image/svg+xml&quot;}]}">
+<link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%238B1A0F'/><text y='.9em' font-size='72' x='50%' text-anchor='middle' font-family='Georgia,serif' fill='%23FAF7F0' font-weight='bold'>K</text></svg>">
+<link rel="manifest" href="data:application/json,{&quot;name&quot;:&quot;KASA&quot;,&quot;short_name&quot;:&quot;KASA&quot;,&quot;start_url&quot;:&quot;.&quot;,&quot;display&quot;:&quot;standalone&quot;,&quot;background_color&quot;:&quot;%238B1A0F&quot;,&quot;theme_color&quot;:&quot;%238B1A0F&quot;,&quot;icons&quot;:[{&quot;src&quot;:&quot;data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%238B1A0F'/><text y='.9em' font-size='72' x='50%25' text-anchor='middle' font-family='Georgia,serif' fill='%23FAF7F0' font-weight='bold'>K</text></svg>&quot;,&quot;sizes&quot;:&quot;192x192&quot;,&quot;type&quot;:&quot;image/svg+xml&quot;}]}">
 <title>KASA</title>
 <title>KASA</title>
 <script>/**
@@ -1014,7 +1014,8 @@ function ReportModal({content, type, onDownload, onClose}) {
 
 // ── Report Generator ──
 function genReport(type, db) {
-  const allGoals=[...db.goals,...db.projects.flatMap(p=>p.goals||[])];
+  function flattenGoals(goals){const r=[];(goals||[]).forEach(g=>{r.push(g);flattenGoals(g.subGoals||[]).forEach(sg=>r.push(sg));});return r;}
+  const allGoals=[...flattenGoals(db.goals),...db.projects.flatMap(p=>flattenGoals(p.goals||[]))];
   const allEntries=allGoals.flatMap(g=>g.entries||[]);
   const now=new Date();
   const thisM=now.toISOString().slice(0,7);
@@ -1108,7 +1109,7 @@ function GroupedEntries({groups, onEdit, onDelete, products}) {
 
 // ── MAIN APP ──
 const EG = () => ({name:"",target:"",category:"sales",period:"monthly",dateStart:"",dateEnd:""});
-const EE = () => ({amount:"",note:"",source:"Cash",goalId:"",projectId:"",date:today(),units:"",productId:null});
+const EE = () => ({amount:"",note:"",source:"Cash",goalId:"",projectId:"",date:today(),units:"",productId:null,modelLines:[]});
 const EX=()=>({name:"",amount:"",category:"Rent",freq:"monthly",startDate:today(),note:"",goalId:null});
 const EP = () => ({name:"",unitCost:"",unit:"pair"});
 
@@ -1337,7 +1338,12 @@ function expCost(exp) {
   }
   function addEntry() {
     const f=eForm; if(!f.amount) return;
-    const entry={id:gid(),amount:parseFloat(f.amount),note:f.note,source:f.source,date:f.date||today(),ts:Date.now(),units:f.units?parseFloat(f.units):0,productId:f.productId||null};
+    // Build note with model lines
+    const modelLines=(f.modelLines||[]).filter(l=>l.trim());
+    const noteWithModels = modelLines.length>0
+      ? (f.note?f.note+" · ":"")+modelLines.join(", ")
+      : f.note||"";
+    const entry={id:gid(),amount:parseFloat(f.amount),note:noteWithModels,source:f.source,date:f.date||today(),ts:Date.now(),units:f.units?parseFloat(f.units):0,productId:f.productId||null};
     const pid=f.projectId||sel.pid||null;
     if(f.goalId) {
       updGoal(f.goalId, g=>({...g,entries:[...(g.entries||[]),entry].sort((a,b)=>b.date.localeCompare(a.date))}), pid);
@@ -1354,8 +1360,18 @@ function expCost(exp) {
     if(uid){
       const goalId=f.goalId||sel.gid_||null;
       const projId=f.projectId||sel.pid||null;
-      console.log("Saving entry - goal_id:", goalId, "project_id:", projId);
-      db_.insert("entries",{id:entry.id,user_id:uid,goal_id:goalId,project_id:projId,amount:entry.amount,source:entry.source||"Cash",note:entry.note||null,date:entry.date||today(),units:entry.units||0,is_recurring:false}).then(()=>console.log("Entry saved OK")).catch(e=>console.error("Entry save failed:",e));
+      db_.insert("entries",{id:entry.id,user_id:uid,goal_id:goalId,project_id:projId,amount:entry.amount,source:entry.source||"Cash",note:entry.note||null,date:entry.date||today(),units:entry.units||0,is_recurring:false}).catch(e=>console.error("Entry save failed:",e));
+      // Auto-save new model names as products
+      if(projId&&modelLines.length>0){
+        const existingNames=(selProj&&selProj.products||[]).map(p=>p.name.toLowerCase());
+        modelLines.forEach(modelName=>{
+          if(!existingNames.includes(modelName.toLowerCase())){
+            const newProd={id:gid(),name:modelName,unitCost:8,unit:"pair",isPremium:false,unit_cost:8,is_premium:false};
+            setDb(d=>({...d,projects:d.projects.map(p=>p.id===projId?{...p,products:[...(p.products||[]),newProd]}:p)}));
+            db_.insert("products",{id:newProd.id,user_id:uid,project_id:projId,name:modelName,unit_cost:8,unit:"pair",is_premium:false}).catch(console.error);
+          }
+        });
+      }
     }
     setEForm(EE()); setView(sel.gid_?"goal":sel.pid?"project":"dashboard"); toast_("Income added ✦");
   }
@@ -1379,7 +1395,7 @@ function expCost(exp) {
     if(uid){db_.insert('products',{id:pr.id,user_id:uid,project_id:pid,name:pr.name,unit_cost:pr.unitCost||0,unit:pr.unit||'pair',is_premium:pr.isPremium||false}).catch(e=>console.error('Product save failed:',e));}
     setPForm(EP()); setView("project"); toast_("Product added ✦");
   }
-  function delEntry(eid,gid_,pid){updGoal(gid_,g=>({...g,entries:(g.entries||[]).filter(e=>e.id!==eid)}),pid);toast_("Entry deleted");}
+  function delEntry(eid,gid_,pid){updGoal(gid_,g=>({...g,entries:(g.entries||[]).filter(e=>e.id!==eid)}),pid);db_.delete("entries",eid).catch(console.error);toast_("Entry deleted");}
   function saveEditGoal(gid_, pid, updates) {
     updGoal(gid_, g=>({...g,...updates}), pid);
     // Update Supabase
@@ -1519,7 +1535,10 @@ function expCost(exp) {
   function goGoal(gid_,pid=null){setSel({pid,gid_});setView("goal");setGoalTab("entries");}
   function goEntry(opts={}){setEForm({...EE(),...opts});setView("newEntry");}
   function goBack(){
-    if(view==="goal"&&sel.pid){setView("project");}
+    if(view==="goal"&&sel.pid){
+      if(selGoal&&selGoal.parentId){setSel(s=>({...s,gid_:selGoal.parentId}));setGoalTab("entries");}
+      else{setView("project");}
+    }
     else if(view==="newSubGoal"){setView("goal");}
     else if(view==="newGoalExpense"){setView("goal");}
     else if(view==="reports"){setView("dashboard");}
@@ -1726,7 +1745,7 @@ function expCost(exp) {
         return db.goals.filter(g=>!g.archived);
       })()}
       onMove={(toGoalId)=>{moveEntry(mod.editEntry.entry,mod.editEntry.gid_,toGoalId,mod.editEntry.pid);}}
-      onClose={()=>setMod(m=>({...m,editEntry:null}))} onSave={updated=>{updGoal(mod.editEntry.gid_,g=>({...g,entries:(g.entries||[]).map(e=>e.id===updated.id?updated:e).sort((a,b)=>b.date.localeCompare(a.date))}),mod.editEntry.pid);setMod(m=>({...m,editEntry:null}));toast_("Updated ✦");}}/>}
+      onClose={()=>setMod(m=>({...m,editEntry:null}))} onSave={updated=>{updGoal(mod.editEntry.gid_,g=>({...g,entries:(g.entries||[]).map(e=>e.id===updated.id?updated:e).sort((a,b)=>b.date.localeCompare(a.date))}),mod.editEntry.pid);db_.update('entries',updated.id,{amount:updated.amount,note:updated.note||null,date:updated.date,source:updated.source,units:updated.units||0}).catch(console.error);setMod(m=>({...m,editEntry:null}));toast_("Updated ✦");}}/>}
     {mod.recur&&<RecurModal initial={mod.recur.data} onClose={()=>setMod(m=>({...m,recur:null}))} onSave={r=>{updGoal(mod.recur.gid_,g=>({...g,recurring:{...r,lastApplied:today()}}),mod.recur.pid);setMod(m=>({...m,recur:null}));toast_("Recurring saved ✦");}}/>}
     {mod.report&&<ReportModal content={mod.report.content} type={mod.report.type} onClose={()=>setMod(m=>({...m,report:null}))} onDownload={()=>{dlReport(mod.report.type,db);setMod(m=>({...m,report:null}));}}/>}
 
@@ -1818,7 +1837,7 @@ function expCost(exp) {
           const totalUnits = cart.reduce((s,i)=>s+i.qty,0);
           const noteStr = posNote || cart.map(i=>`${i.qty}x ${i.name}`).join(", ");
           const entry = {
-            id:gid(), amount:finalTotal, note:noteStr,
+            id:gid(), amount:finalTotal, note:finalNoteStr||noteStr,
             source:posPayment, date:posDate||today(), ts:Date.now(),
             units:totalUnits, productId:null,
             cartItems: cart.map(i=>({productId:i.productId,name:i.name,qty:i.qty,price:calcSockPrice(i.qty,i.isPremium)}))
@@ -1875,7 +1894,8 @@ function expCost(exp) {
                 {cart.map(item=>{
                   const linePrice = calcSockPrice(item.qty, item.isPremium);
                   return (
-                    <div key={item.productId} style={{display:"flex",alignItems:"center",background:"#721408",borderRadius:8,padding:"10px 12px",marginBottom:5}}>
+                    <React.Fragment key={item.productId}>
+                    <div style={{display:"flex",alignItems:"center",background:"#721408",borderRadius:8,padding:"10px 12px",marginBottom:5}}>
                       <div style={{flex:1}}>
                         <div style={{fontSize:13,color:"#FAF7F0",fontWeight:600}}>{item.name}</div>
                         <div style={{fontSize:11,color:"#FAD5C8"}}>{item.isPremium?"£10/pair":"auto-price"}</div>
@@ -1887,6 +1907,23 @@ function expCost(exp) {
                         <span style={{fontSize:14,fontWeight:700,color:"#FAF7F0",minWidth:40,textAlign:"right"}}>{fmtGBP(linePrice)}</span>
                       </div>
                     </div>
+                    {item.qty>0&&<div style={{marginTop:4}}>
+                      {Array.from({length:item.qty}).map((_,mi)=>{
+                        const lineKey=item.productId+'_'+mi;
+                        const val=(posModelLines[lineKey]||"");
+                        const existingModels=(selProj.products||[]).map(p=>p.name);
+                        return <div key={mi} style={{marginBottom:3}}>
+                          <input style={{width:"100%",background:"#8B1A0F",border:"1px solid rgba(250,247,240,0.2)",borderRadius:7,padding:"6px 10px",color:"#FAF7F0",fontSize:11,outline:"none",boxSizing:"border-box",fontFamily:"inherit"}}
+                            placeholder={`Pair ${mi+1} model (optional)`}
+                            value={val}
+                            onChange={e=>{setPosModelLines(v=>({...v,[lineKey]:e.target.value}));}}/>
+                          {val.length===0&&existingModels.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:3,marginTop:2}}>
+                            {existingModels.map(p=><span key={p} style={{background:"#721408",border:"1px solid rgba(250,247,240,0.25)",borderRadius:4,padding:"1px 7px",fontSize:9,color:"#FAD5C8",cursor:"pointer"}} onClick={()=>setPosModelLines(v=>({...v,[lineKey]:p}))}>{p}</span>)}
+                          </div>}
+                        </div>;
+                      })}
+                    </div>}
+                    </React.Fragment>
                   );
                 })}
 
@@ -1983,7 +2020,7 @@ function expCost(exp) {
         </>}
         {view==="project"&&selProj&&<>
           <button style={{background:"#FAF7F0",color:"#C0392B",border:"none",borderRadius:6,padding:"5px 10px",fontSize:13,fontWeight:700,cursor:"pointer"}} onClick={()=>{setGForm(EG());setView("newGoal");}}>+ Goal</button>
-          <button style={{background:"#5A9E6F",color:"#fff",border:"none",borderRadius:6,padding:"5px 10px",fontSize:13,fontWeight:700,cursor:"pointer"}} onClick={()=>{setPosMode(true);setCart([]);setPosPayment("Cash");setPosNote("");setPosGoalId("");setPosDiscount("");setPosDate(today());}}>🛍 Sale</button>
+          
           <button style={{background:"#5A9E6F",color:"#fff",border:"none",borderRadius:6,padding:"5px 10px",fontSize:13,fontWeight:700,cursor:"pointer"}} onClick={()=>{setPosMode(true);setCart([]);setPosPayment("Cash");setPosNote("");setPosGoalId("");setPosDiscount("");setPosDate(today());}}>🛍 Sale</button>
           <button style={{background:"none",border:"1px solid #222",color:"#FAF7F0",borderRadius:6,padding:"5px 8px",fontSize:12,cursor:"pointer"}} onClick={()=>goEntry({projectId:sel.pid})}>+ Income</button>
         </>}
@@ -2150,7 +2187,7 @@ function expCost(exp) {
 
     {/* GOAL */}
     {view==="goal"&&selGoal&&(()=>{
-      const earned=sumIncome(selGoal.entries);
+      const earned=sumGoalTotal(selGoal);
       const pct=Math.min(100,(earned/Math.max(selGoal.target,1))*100);
       const c=selCfg.color;
       const products=sel.pid?(db.projects.find(p=>p.id===sel.pid)||{}).products||[]:[];
@@ -2310,6 +2347,22 @@ function expCost(exp) {
         <div style={S.field}><label style={S.label}>Note (optional)</label>
           <SuggestInput style={S.input} value={eForm.note} onChange={v=>setEForm(f=>({...f,note:v}))} suggestions={sugg.notes} placeholder="Market sale, online order..."/>
         </div>
+        {eForm.units&&Number(eForm.units)>0&&<div style={S.field}>
+          <label style={S.label}>Model Details (optional)</label>
+          <div style={{display:"flex",flexDirection:"column",gap:5}}>
+            {Array.from({length:Number(eForm.units)}).map((_,i)=>{
+              const allProds=(selProj&&selProj.products||[]).map(p=>p.name);
+              const val=(eForm.modelLines||[])[i]||"";
+              return <div key={i} style={{position:"relative"}}>
+                <input style={{...S.input,paddingRight:8}} placeholder={`Pair ${i+1} — model name`} value={val}
+                  onChange={e=>{const lines=[...(eForm.modelLines||[])];lines[i]=e.target.value;setEForm(v=>({...v,modelLines:lines}));}}/>
+                {allProds.length>0&&val.length===0&&<div style={{display:"flex",flexWrap:"wrap",gap:4,marginTop:3}}>
+                  {allProds.map(p=><span key={p} style={{background:"#721408",border:"1px solid rgba(250,247,240,0.3)",borderRadius:5,padding:"2px 8px",fontSize:10,color:"#FAF7F0",cursor:"pointer"}} onClick={()=>{const lines=[...(eForm.modelLines||[])];lines[i]=p;setEForm(v=>({...v,modelLines:lines}));}}>{p}</span>)}
+                </div>}
+              </div>;
+            })}
+          </div>
+        </div>}
         <button style={{...S.btn,opacity:!eForm.amount?0.4:1}} onClick={addEntry}>Save Entry</button>
       </div>;
     })()}
