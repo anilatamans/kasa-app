@@ -1048,11 +1048,13 @@ function dlCSV(db) {
 
 
 function NewEntryView({eForm, setEForm, sel, db, sugg, selProj, addEntry, goBack, S, fmtGBP, today}) {
+  try {
   const pid = eForm.projectId||sel.pid;
-  const proj = pid ? db.projects.find(p=>p.id===pid) : null;
-  const prods = proj ? proj.products||[] : [];
-  const goalsList = proj ? (proj.goals||[]).filter(g=>!g._general&&!g.archived) : db.goals.filter(g=>!g.archived);
-  const prodObj = prods.find(p=>p.id===eForm.productId);
+  const proj = pid ? (db.projects||[]).find(p=>p.id===pid) : null;
+  const prods = (proj ? proj.products||[] : []).filter(Boolean);
+  const goalsList = proj ? (proj.goals||[]).filter(g=>g&&!g._general&&!g.archived) : (db.goals||[]).filter(g=>g&&!g.archived);
+  const prodObj = prods.find(p=>p&&p.id===eForm.productId)||null;
+  const safeNotes = (sugg&&sugg.notes)||[];
 
   return <div style={S.page}>
     <div style={{fontSize:19,fontWeight:700,marginBottom:18,letterSpacing:1.5}}>Add Income</div>
@@ -1091,10 +1093,18 @@ function NewEntryView({eForm, setEForm, sel, db, sugg, selProj, addEntry, goBack
       inputStyle={S.input}
     />}
     <div style={S.field}><label style={S.label}>Note (optional)</label>
-      <SuggestInput style={S.input} value={eForm.note} onChange={v=>setEForm(f=>({...f,note:v}))} suggestions={sugg.notes} placeholder="Market sale, online order..."/>
+      <SuggestInput style={S.input} value={eForm.note} onChange={v=>setEForm(f=>({...f,note:v}))} suggestions={safeNotes} placeholder="Market sale, online order..."/>
     </div>
     <button style={{...S.btn,opacity:!eForm.amount?0.4:1}} onClick={addEntry}>Save Entry</button>
   </div>;
+  } catch(err) {
+    console.error('NewEntryView crash:', err);
+    return <div style={{color:"#FAF7F0",padding:20,background:"#8B1A0F"}}>
+      <div style={{fontWeight:700,marginBottom:8}}>Error in entry form</div>
+      <div style={{fontSize:12,opacity:0.7}}>{String(err.message)}</div>
+      <button style={{marginTop:12,background:"#FAF7F0",color:"#8B1A0F",border:"none",borderRadius:8,padding:"8px 16px",cursor:"pointer",fontWeight:700}} onClick={goBack}>← Back</button>
+    </div>;
+  }
 }
 
 
