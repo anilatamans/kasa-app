@@ -1046,6 +1046,30 @@ function dlCSV(db) {
   const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download="vault.csv";a.click();
 }
 
+// ── Model Lines Input ──
+function ModelLinesInput({count, lines, products, onChange, inputStyle}) {
+  function setLine(i, val) {
+    const next = [...lines];
+    next[i] = val;
+    onChange(next);
+  }
+  return <div style={{marginBottom:14}}>
+    <label style={{display:"block",fontSize:11,letterSpacing:1.5,color:"#FAF7F0",textTransform:"uppercase",marginBottom:6,fontWeight:600}}>Model Details (optional)</label>
+    <div style={{display:"flex",flexDirection:"column",gap:5}}>
+      {Array.from({length:count}).map(function(_,i){
+        var val = lines[i]||"";
+        return <div key={i} style={{marginBottom:2}}>
+          <input style={inputStyle} placeholder={"Pair "+(i+1)+" — model name"} value={val}
+            onChange={function(e){setLine(i,e.target.value);}}/>
+          {products.length>0&&val.length===0&&<div style={{display:"flex",flexWrap:"wrap",gap:3,marginTop:2}}>
+            {products.map(function(p){return <span key={p} style={{background:"#721408",border:"1px solid rgba(250,247,240,0.3)",borderRadius:5,padding:"2px 8px",fontSize:10,color:"#FAF7F0",cursor:"pointer"}} onClick={function(){setLine(i,p);}}>{p}</span>;})}
+          </div>}
+        </div>;
+      })}
+    </div>
+  </div>;
+}
+
 // ── Grouped Entries ──
 function GoalEntriesView({entries, sel, products, setMod, delEntry}) {
   if(!entries.length) return <div style={{color:"#FAF7F0",fontSize:14,textAlign:"center",padding:"22px 0"}}>No entries yet</div>;
@@ -1753,7 +1777,7 @@ function expCost(exp) {
       {/* ── PRODUCT DETAIL MODAL ── */}
       {viewProduct&&(()=>{
         const proj=db.projects.find(p=>p.id===viewProduct.pid);
-        const allEntries=(proj&&proj.goals||[]).flatMap(g=>g.entries||[]);
+        const allEntries=(function flatE(goals){return (goals||[]).flatMap(g=>[...(g.entries||[]),...flatE(g.subGoals||[])]);})((proj&&proj.goals)||[]);
         // Group by date
         const byDate={};
         allEntries.forEach(e=>{
@@ -1911,7 +1935,7 @@ function expCost(exp) {
                       {Array.from({length:item.qty}).map((_,mi)=>{
                         const lineKey=item.productId+'_'+mi;
                         const val=(posModelLines[lineKey]||"");
-                        const existingModels=(selProj.products||[]).map(p=>p.name);
+                        const existingModels=((selProj&&selProj.products)||[]).map(p=>p.name);
                         return <div key={mi} style={{marginBottom:3}}>
                           <input style={{width:"100%",background:"#8B1A0F",border:"1px solid rgba(250,247,240,0.2)",borderRadius:7,padding:"6px 10px",color:"#FAF7F0",fontSize:11,outline:"none",boxSizing:"border-box",fontFamily:"inherit"}}
                             placeholder={`Pair ${mi+1} model (optional)`}
@@ -2347,22 +2371,13 @@ function expCost(exp) {
         <div style={S.field}><label style={S.label}>Note (optional)</label>
           <SuggestInput style={S.input} value={eForm.note} onChange={v=>setEForm(f=>({...f,note:v}))} suggestions={sugg.notes} placeholder="Market sale, online order..."/>
         </div>
-        {eForm.units&&Number(eForm.units)>0&&<div style={S.field}>
-          <label style={S.label}>Model Details (optional)</label>
-          <div style={{display:"flex",flexDirection:"column",gap:5}}>
-            {Array.from({length:Number(eForm.units)}).map((_,i)=>{
-              const allProds=(selProj&&selProj.products||[]).map(p=>p.name);
-              const val=(eForm.modelLines||[])[i]||"";
-              return <div key={i} style={{position:"relative"}}>
-                <input style={{...S.input,paddingRight:8}} placeholder={`Pair ${i+1} — model name`} value={val}
-                  onChange={e=>{const lines=[...(eForm.modelLines||[])];lines[i]=e.target.value;setEForm(v=>({...v,modelLines:lines}));}}/>
-                {allProds.length>0&&val.length===0&&<div style={{display:"flex",flexWrap:"wrap",gap:4,marginTop:3}}>
-                  {allProds.map(p=><span key={p} style={{background:"#721408",border:"1px solid rgba(250,247,240,0.3)",borderRadius:5,padding:"2px 8px",fontSize:10,color:"#FAF7F0",cursor:"pointer"}} onClick={()=>{const lines=[...(eForm.modelLines||[])];lines[i]=p;setEForm(v=>({...v,modelLines:lines}));}}>{p}</span>)}
-                </div>}
-              </div>;
-            })}
-          </div>
-        </div>}
+        {eForm.units&&Number(eForm.units)>0&&<ModelLinesInput
+          count={Math.max(0,Math.min(20,Number(eForm.units)||0))}
+          lines={eForm.modelLines||[]}
+          products={((selProj&&selProj.products)||[]).map(p=>p.name)}
+          onChange={lines=>setEForm(v=>({...v,modelLines:lines}))}
+          inputStyle={S.input}
+        />}
         <button style={{...S.btn,opacity:!eForm.amount?0.4:1}} onClick={addEntry}>Save Entry</button>
       </div>;
     })()}
