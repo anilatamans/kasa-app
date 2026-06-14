@@ -1046,6 +1046,58 @@ function dlCSV(db) {
   const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download="vault.csv";a.click();
 }
 
+
+function NewEntryView({eForm, setEForm, sel, db, sugg, selProj, addEntry, goBack, S, fmtGBP, today}) {
+  const pid = eForm.projectId||sel.pid;
+  const proj = pid ? db.projects.find(p=>p.id===pid) : null;
+  const prods = proj ? proj.products||[] : [];
+  const goalsList = proj ? (proj.goals||[]).filter(g=>!g._general&&!g.archived) : db.goals.filter(g=>!g.archived);
+  const prodObj = prods.find(p=>p.id===eForm.productId);
+
+  return <div style={S.page}>
+    <div style={{fontSize:19,fontWeight:700,marginBottom:18,letterSpacing:1.5}}>Add Income</div>
+    <div style={S.field}><label style={S.label}>Amount (£)</label>
+      <input style={S.input} type="number" placeholder="50" value={eForm.amount} onChange={e=>setEForm(v=>({...v,amount:e.target.value}))}/>
+    </div>
+    <div style={S.field}><label style={S.label}>Date</label>
+      <input style={S.input} type="date" value={eForm.date} onChange={e=>setEForm(v=>({...v,date:e.target.value}))}/>
+    </div>
+    <div style={S.field}><label style={S.label}>Payment Method</label>
+      <div style={S.chipRow}>{["Cash","Square","Shopify","Online","Transfer","Other"].map(s=>(
+        <Chip key={s} active={eForm.source===s} color="#FAF7F0" onClick={()=>setEForm(v=>({...v,source:s}))}>{s}</Chip>
+      ))}</div>
+    </div>
+    {goalsList.length>0&&<div style={S.field}><label style={S.label}>Goal</label>
+      <div style={S.chipRow}>
+        <Chip active={!eForm.goalId} color="#FAF7F0" onClick={()=>setEForm(v=>({...v,goalId:""}))}>General</Chip>
+        {goalsList.map(g=><Chip key={g.id} active={eForm.goalId===g.id} color="#FAF7F0" onClick={()=>setEForm(v=>({...v,goalId:g.id}))}>{g.name}</Chip>)}
+      </div>
+    </div>}
+    {prods.length>0&&<div style={S.field}><label style={S.label}>Product Sold (optional)</label>
+      <div style={S.chipRow}>
+        <Chip active={!eForm.productId} color="#FAF7F0" onClick={()=>setEForm(v=>({...v,productId:null,units:""}))}>None</Chip>
+        {prods.map(p=><Chip key={p.id} active={eForm.productId===p.id} color="#FAF7F0" onClick={()=>setEForm(v=>({...v,productId:p.id}))}>{p.name}</Chip>)}
+      </div>
+    </div>}
+    {eForm.productId&&<div style={S.field}><label style={S.label}>Units Sold</label>
+      <input style={S.input} type="number" placeholder="0" value={eForm.units} onChange={e=>setEForm(v=>({...v,units:e.target.value}))}/>
+      {eForm.units&&prodObj&&<div style={{fontSize:12,color:"#FAF7F0",marginTop:5}}>Suggested: {fmtGBP(calcSockPrice(Number(eForm.units),prodObj.isPremium||prodObj.is_premium))}</div>}
+    </div>}
+    {eForm.units&&Number(eForm.units)>0&&<ModelLinesInput
+      count={Math.max(0,Math.min(20,Number(eForm.units)||0))}
+      lines={eForm.modelLines||[]}
+      products={((selProj&&selProj.products)||[]).map(p=>p.name)}
+      onChange={lines=>setEForm(v=>({...v,modelLines:lines}))}
+      inputStyle={S.input}
+    />}
+    <div style={S.field}><label style={S.label}>Note (optional)</label>
+      <SuggestInput style={S.input} value={eForm.note} onChange={v=>setEForm(f=>({...f,note:v}))} suggestions={sugg.notes} placeholder="Market sale, online order..."/>
+    </div>
+    <button style={{...S.btn,opacity:!eForm.amount?0.4:1}} onClick={addEntry}>Save Entry</button>
+  </div>;
+}
+
+
 // ── Model Lines Input ──
 function ModelLinesInput({count, lines, products, onChange, inputStyle}) {
   function setLine(i, val) {
@@ -2348,40 +2400,12 @@ function expCost(exp) {
     </div>}
 
     {/* NEW ENTRY */}
-    {view==="newEntry"&&(()=>{
-      const pid=eForm.projectId||sel.pid;
-      const proj=pid?db.projects.find(p=>p.id===pid):null;
-      const avG=proj?(proj.goals||[]).filter(g=>!g.archived&&!g._general):indepG;
-      const prods=proj?proj.products||[]:[];
-      return <div style={S.page}>
-        <div style={{fontSize:19,fontWeight:700,marginBottom:18,letterSpacing:1.5}}>Add Income</div>
-        {db.projects.length>0&&<div style={S.field}><label style={S.label}>Project (optional)</label><div style={S.chipRow}><Chip active={!pid} onClick={()=>setEForm(v=>({...v,projectId:null,goalId:""}))}>Independent</Chip>{db.projects.map(p=><Chip key={p.id} active={pid===p.id} onClick={()=>setEForm(v=>({...v,projectId:p.id,goalId:""}))}>{p.name}</Chip>)}</div></div>}
-        {avG.length>0&&<div style={S.field}><label style={S.label}>Goal (optional)</label><div style={{display:"flex",flexDirection:"column",gap:5}}>
-          <div style={{background:"#A02218",border:`1px solid ${!eForm.goalId?"#FAF7F0":"#D45A4A"}`,background:!eForm.goalId?"#E8C54718":"#CC4A3C",borderRadius:9,padding:"10px 12px",fontSize:14,cursor:"pointer"}} onClick={()=>setEForm(v=>({...v,goalId:""}))}>📌 No specific goal</div>
-          {avG.map(g=>{const gc=CAT[g.category]||CAT.other;return<div key={g.id} style={{background:eForm.goalId===g.id?gc.color+"18":"#CC4A3C",border:`1px solid ${eForm.goalId===g.id?gc.color:"#D45A4A"}`,borderRadius:9,padding:"10px 12px",fontSize:14,cursor:"pointer"}} onClick={()=>setEForm(v=>({...v,goalId:g.id}))}>{gc.emoji} {g.name}</div>;})}
-        </div></div>}
-        <div style={S.field}><label style={S.label}>Amount (£)</label>
-          <input style={S.input} type="number" placeholder="250" value={eForm.amount} onChange={e=>setEForm(v=>({...v,amount:e.target.value}))}/>
-          <AmountQuick amounts={sugg.amounts} onSelect={a=>setEForm(v=>({...v,amount:a}))}/>
-        </div>
-        <div style={S.field}><label style={S.label}>Date</label><input style={S.input} type="date" value={eForm.date} onChange={e=>setEForm(v=>({...v,date:e.target.value}))}/></div>
-        <div style={S.field}><label style={S.label}>Payment Method</label><div style={S.chipRow}>{SOURCES.map(s=><Chip key={s} active={eForm.source===s} onClick={()=>setEForm(v=>({...v,source:s}))}>{(SRC[s]&&SRC[s].emoji)||"✦"} {s}</Chip>)}</div></div>
-        {prods.length>0&&<><div style={S.field}><label style={S.label}>Product Sold (optional)</label><div style={S.chipRow}><Chip active={!eForm.productId} color="#FAF7F0" onClick={()=>setEForm(v=>({...v,productId:null,units:""}))}>None</Chip>{prods.map(p=><Chip key={p.id} active={eForm.productId===p.id} color="#FAF7F0" onClick={()=>setEForm(v=>({...v,productId:p.id}))}>{p.name} (£{p.unitCost}/{p.unit})</Chip>)}</div></div>
-        {eForm.productId&&<div style={S.field}><label style={S.label}>Units Sold</label><input style={S.input} type="number" placeholder="0" value={eForm.units} onChange={e=>setEForm(v=>({...v,units:e.target.value}))}/>{eForm.units&&<div style={{fontSize:12,color:"#FAF7F0",marginTop:5}}>Cost: {fmtGBP(Number(eForm.units)*((prods.find(p=>p.id===eForm.productId)||{}).unitCost||0))}</div>}</div>}</>}
-        <div style={S.field}><label style={S.label}>Note (optional)</label>
-          <SuggestInput style={S.input} value={eForm.note} onChange={v=>setEForm(f=>({...f,note:v}))} suggestions={sugg.notes} placeholder="Market sale, online order..."/>
-        </div>
-        {eForm.units&&Number(eForm.units)>0&&<ModelLinesInput
-          count={Math.max(0,Math.min(20,Number(eForm.units)||0))}
-          lines={eForm.modelLines||[]}
-          products={((selProj&&selProj.products)||[]).map(p=>p.name)}
-          onChange={lines=>setEForm(v=>({...v,modelLines:lines}))}
-          inputStyle={S.input}
-        />}
-        <button style={{...S.btn,opacity:!eForm.amount?0.4:1}} onClick={addEntry}>Save Entry</button>
-      </div>;
-    })()}
-
+    {view==="newEntry"&&<NewEntryView
+      eForm={eForm} setEForm={setEForm}
+      sel={sel} db={db} sugg={sugg} selProj={selProj}
+      addEntry={addEntry} goBack={goBack}
+      S={S} fmtGBP={fmtGBP} today={today}
+    />}
     {/* NEW GOAL EXPENSE */}
     {view==="newGoalExpense"&&selGoal&&<div style={S.page}>
       <div style={{fontSize:19,fontWeight:700,marginBottom:6,letterSpacing:1.5}}>Add Expense</div>
