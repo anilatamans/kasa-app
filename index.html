@@ -1923,6 +1923,8 @@ function expCost(exp) {
           const uid = getUserId();
           const totalUnits = cart.reduce((s,i)=>s+i.qty,0);
           const noteStr = posNote || cart.map(i=>`${i.qty}x ${i.name}`).join(", ");
+          const modelNotes = Object.values(posModelLines).filter(v=>v&&v.trim()).join(", ");
+          const finalNoteStr = modelNotes ? (noteStr ? noteStr+" · "+modelNotes : modelNotes) : noteStr;
           const entry = {
             id:gid(), amount:finalTotal, note:finalNoteStr||noteStr,
             source:posPayment, date:posDate||today(), ts:Date.now(),
@@ -1942,7 +1944,7 @@ function expCost(exp) {
               return {...p,goals:[...rest,{...gen,entries:[...(gen.entries||[]),entry].sort((a,b)=>b.date.localeCompare(a.date))}]};
             })}));
           }
-          if(uid) db_.insert("entries",{id:entry.id,user_id:uid,goal_id:targetGoalId||null,project_id:pid,amount:finalTotal,source:posPayment,note:noteStr,date:today(),units:totalUnits}).catch(console.error);
+          if(uid) db_.insert("entries",{id:entry.id,user_id:uid,goal_id:targetGoalId||null,project_id:pid,amount:finalTotal,source:posPayment,note:noteStr,date:posDate||today(),units:totalUnits}).catch(console.error);
           setPosMode(false); setCart([]); toast_(`Sale saved — ${fmtGBP(finalTotal)} ✦`);
         }
 
