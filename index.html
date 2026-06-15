@@ -1254,7 +1254,6 @@ function App() {
     try {
       const q = JSON.parse(localStorage.getItem('kasa_pending')||'[]');
       if(!q.length) return;
-      console.log('Flushing', q.length, 'pending operations...');
       const remaining = [];
       for(const op of q) {
         try {
@@ -1265,13 +1264,11 @@ function App() {
         }
       }
       localStorage.setItem('kasa_pending', JSON.stringify(remaining));
-      if(q.length !== remaining.length) console.log('Synced', q.length-remaining.length, 'pending ops');
     } catch(e) { console.error('Flush failed:', e); }
   }
 
   async function loadFromSupabase() {
     setSyncStatus('syncing');
-    console.log('Loading from Supabase...');
     // Try loading from localStorage backup first for instant load
     try {
       const backup = localStorage.getItem('kasa_backup_'+getUserId());
@@ -1299,6 +1296,7 @@ function App() {
           ...g,
           target: Number(g.target||0),
           archived: g.archived||false,
+          parentId: g.parent_id||null,
           entries: allEntries.filter(e=>e.goal_id===g.id).map(e=>({
             ...e, amount:Number(e.amount), units:Number(e.units||0),
             date: e.date, recurring: e.is_recurring
@@ -1312,19 +1310,12 @@ function App() {
         };
       }
 
-      console.log('Building projects, goal count:', (goals||[]).length);
-      if(goals&&goals.length>0) {
-        goals.forEach(g=>console.log('Goal check - project_id:', g.project_id, 'parent_id:', g.parent_id, 'type:', typeof g.parent_id));
-        projects.forEach(p=>console.log('Project id:', p.id));
-      }
       const builtProjects = (projects||[]).map(p => {
         const projGoals = (goals||[]).filter(g=>{
           const pidMatch = g.project_id===p.id;
           const noParent = g.parent_id===null||g.parent_id===undefined||g.parent_id==='null'||g.parent_id==='';
-          console.log('Filter check - g.project_id:', JSON.stringify(g.project_id), 'p.id:', JSON.stringify(p.id), 'match:', pidMatch, 'noParent:', noParent);
           return pidMatch && noParent;
         });
-        console.log('Project', p.name, 'matched goals:', projGoals.length);
         return {
         ...p,
         goals: projGoals.map(g=>buildGoal(g,goals||[],expenses||[],entries||[])),
@@ -1339,10 +1330,6 @@ function App() {
 
       const indepGoals = (goals||[]).filter(g=>!g.project_id&&!g.parent_id).map(g=>buildGoal(g,goals||[],expenses||[],entries||[]));
 
-      console.log('Raw from Supabase - projects:', (projects||[]).length, 'goals:', (goals||[]).length, 'entries:', (entries||[]).length);
-      console.log('Built projects:', builtProjects.length, 'with goals:', builtProjects.map(p=>p.goals?.length), 'indep goals:', indepGoals.length);
-      console.log('Calling setDb with projects:', builtProjects.length);
-      if(goals&&goals.length>0) console.log('First goal:', JSON.stringify(goals[0]).slice(0,100));
       setDb({projects: builtProjects, goals: applyRec(indepGoals)});
       setSyncStatus('idle');
       flushPendingSync(); // Retry any failed saves
@@ -1471,7 +1458,7 @@ function expCost(exp) {
       setDb(d=>({...d,projects:d.projects.map(p=>p.id===pid?{...p,expenses:[...(p.expenses||[]),x]}:p)}));
     }
     const uid=getUserId();
-    if(uid){db_.insert('expenses',{id:x.id,user_id:uid,project_id:pid||null,goal_id:goalId||null,name:x.name,amount:x.amount,category:x.category||'Other',freq:x.freq||'monthly',start_date:x.startDate||null,note:x.note||null}).then(()=>console.log('Expense saved')).catch(e=>console.error('Expense save failed:',e));}
+    if(uid){db_.insert('expenses',{id:x.id,user_id:uid,project_id:pid||null,goal_id:goalId||null,name:x.name,amount:x.amount,category:x.category||'Other',freq:x.freq||'monthly',start_date:x.startDate||null,note:x.note||null}).catch(e=>console.error('Expense save failed:',e));}
     setXForm(EX()); setView("project"); toast_("Expense added ✦");
   }
   function addProduct(pid) {
@@ -1531,8 +1518,8 @@ function expCost(exp) {
     return goals.filter(g=>g.id!==gid_).map(g=>({...g,subGoals:removeGoalDeep(g.subGoals||[],gid_)}));
   }
   function delGoal(gid_,pid){
-    const isSubGoal=selGoal&&selGoal.parentId;
-    const parentId=selGoal&&selGoal.parentId;
+    const isSubGoal=selGoal&&(selGoal.parentId||selGoal.parent_id);
+    const parentId=selGoal&&(selGoal.parentId||selGoal.parent_id);
     if(pid){setDb(d=>({...d,projects:d.projects.map(p=>p.id===pid?{...p,goals:removeGoalDeep(p.goals||[],gid_)}:p)}));}
     else{setDb(d=>({...d,goals:removeGoalDeep(d.goals,gid_)}));}
     db_.delete('goals',gid_).catch(console.error);
@@ -1591,7 +1578,7 @@ function expCost(exp) {
         const name = cols[nameIdx];
         const cost = parseFloat(cols[costIdx]||"0");
         const unit = unitIdx>=0 ? cols[unitIdx]||"pair" : "pair";
-        const isPrem = premIdx>=0 ? cols[premIdx].toLowerCase()==="true" : false;
+        const isPrem = premIdx>=0 ? (cols[premIdx]||"").toLowerCase()==="true" : false;
         if(!name) return;
         const pr = {id:gid(),name,unitCost:cost,unit,isPremium:isPrem,unit_cost:cost,is_premium:isPrem};
         newProds.push(pr);
@@ -1833,7 +1820,7 @@ function expCost(exp) {
       })()}
       onMove={(toGoalId)=>{moveEntry(mod.editEntry.entry,mod.editEntry.gid_,toGoalId,mod.editEntry.pid);}}
       onClose={()=>setMod(m=>({...m,editEntry:null}))} onSave={updated=>{updGoal(mod.editEntry.gid_,g=>({...g,entries:(g.entries||[]).map(e=>e.id===updated.id?updated:e).sort((a,b)=>b.date.localeCompare(a.date))}),mod.editEntry.pid);db_.update('entries',updated.id,{amount:updated.amount,note:updated.note||null,date:updated.date,source:updated.source,units:updated.units||0}).catch(console.error);setMod(m=>({...m,editEntry:null}));toast_("Updated ✦");}}/>}
-    {mod.recur&&<RecurModal initial={mod.recur.data} onClose={()=>setMod(m=>({...m,recur:null}))} onSave={r=>{updGoal(mod.recur.gid_,g=>({...g,recurring:{...r,lastApplied:today()}}),mod.recur.pid);setMod(m=>({...m,recur:null}));toast_("Recurring saved ✦");}}/>}
+    {mod.recur&&<RecurModal initial={mod.recur.data} onClose={()=>setMod(m=>({...m,recur:null}))} onSave={r=>{const rec={...r,lastApplied:today()};updGoal(mod.recur.gid_,g=>({...g,recurring:rec}),mod.recur.pid);db_.update('goals',mod.recur.gid_,{recurring:rec}).catch(e=>console.error('Recurring save failed:',e));setMod(m=>({...m,recur:null}));toast_("Recurring saved ✦");}}/>}
     {mod.report&&<ReportModal content={mod.report.content} type={mod.report.type} onClose={()=>setMod(m=>({...m,report:null}))} onDownload={()=>{dlReport(mod.report.type,db);setMod(m=>({...m,report:null}));}}/>}
 
 
@@ -1944,7 +1931,7 @@ function expCost(exp) {
               return {...p,goals:[...rest,{...gen,entries:[...(gen.entries||[]),entry].sort((a,b)=>b.date.localeCompare(a.date))}]};
             })}));
           }
-          if(uid) db_.insert("entries",{id:entry.id,user_id:uid,goal_id:targetGoalId||null,project_id:pid,amount:finalTotal,source:posPayment,note:noteStr,date:posDate||today(),units:totalUnits}).catch(console.error);
+          if(uid) db_.insert("entries",{id:entry.id,user_id:uid,goal_id:targetGoalId||null,project_id:pid,amount:finalTotal,source:posPayment,note:finalNoteStr||noteStr,date:posDate||today(),units:totalUnits}).catch(console.error);
           setPosMode(false); setCart([]); toast_(`Sale saved — ${fmtGBP(finalTotal)} ✦`);
         }
 
@@ -2093,7 +2080,6 @@ function expCost(exp) {
         );
       })()}
 
-{console.log('RENDER: db.projects:', db.projects.length, 'goals:', db.goals.length)}
     {/* HEADER */}
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"13px 12px 11px",position:"sticky",top:0,background:"#8B1A0F",zIndex:10,borderBottom:"1px solid #181818"}}>
       <div style={{display:"flex",alignItems:"center",gap:9}}>
