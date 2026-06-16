@@ -579,23 +579,32 @@ function prodCost(prod, entries=[]) {
 function applyRec(goals=[]) {
   const t=today();
   return goals.map(g=>{
-    if(!g.recurring||!g.recurring.enabled) return g;
-    const {freq,amount,note,source,lastApplied}=g.recurring;
-    let cur=new Date((lastApplied||g.createdStr||t)+"T00:00:00");
-    const td=new Date(t+"T00:00:00");
+    // Support both legacy single-object and new array format
+    const rawRec=g.recurring;
+    const rules=Array.isArray(rawRec)?rawRec:(rawRec&&rawRec.enabled?[rawRec]:[]);
+    if(!rules.some(r=>r.enabled)) return g;
     const entries=[...(g.entries||[])];
-    let last=lastApplied;
-    while(true){
-      const next=new Date(cur);
-      if(freq==="daily") next.setDate(next.getDate()+1);
-      else if(freq==="weekly") next.setDate(next.getDate()+7);
-      else next.setMonth(next.getMonth()+1);
-      if(next>td) break;
-      const ds=next.toISOString().slice(0,10);
-      entries.push({id:gid(),amount:parseFloat(amount),note:note||"Recurring",source:source||"Transfer",date:ds,ts:next.getTime(),recurring:true});
-      last=ds; cur=next;
-    }
-    return {...g,entries:entries.sort((a,b)=>b.date.localeCompare(a.date)),recurring:{...g.recurring,lastApplied:last||lastApplied}};
+    const updatedRules=rules.map(rule=>{
+      if(!rule.enabled) return rule;
+      const {freq,amount,note,source,lastApplied}=rule;
+      let cur=new Date((lastApplied||g.createdStr||t)+"T00:00:00");
+      const td=new Date(t+"T00:00:00");
+      let last=lastApplied;
+      while(true){
+        const next=new Date(cur);
+        if(freq==="daily") next.setDate(next.getDate()+1);
+        else if(freq==="weekly") next.setDate(next.getDate()+7);
+        else next.setMonth(next.getMonth()+1);
+        if(next>td) break;
+        const ds=next.toISOString().slice(0,10);
+        entries.push({id:gid(),amount:parseFloat(amount),note:note||"Recurring",source:source||"Transfer",date:ds,ts:next.getTime(),recurring:true});
+        last=ds; cur=next;
+      }
+      return {...rule,lastApplied:last||lastApplied};
+    });
+    // Keep same format as input (legacy object → object, array → array)
+    const newRecurring=Array.isArray(rawRec)?updatedRules:updatedRules[0];
+    return {...g,entries:entries.sort((a,b)=>b.date.localeCompare(a.date)),recurring:newRecurring};
   });
 }
 
@@ -1236,6 +1245,35 @@ function App() {
     try{ return JSON.parse(localStorage.getItem('kasa_session')||'null'); } catch{ return null; }
   });
   const [syncStatus, setSyncStatus] = useState('idle'); // idle | syncing | error
+  const navRestoredRef = React.useRef(false);
+
+  // Push navigation to browser history so back button works
+  useEffect(()=>{
+    if(!session) return;
+    const state={view,sel};
+    window.history.pushState(state,'');
+    try{ sessionStorage.setItem('kasa_nav',JSON.stringify(state)); }catch{}
+  },[view,sel]);
+
+  // Browser back/forward button handler
+  useEffect(()=>{
+    const handler=(e)=>{
+      if(e.state&&e.state.view){setView(e.state.view);setSel(e.state.sel||{pid:null,gid_:null});}
+    };
+    window.addEventListener('popstate',handler);
+    return ()=>window.removeEventListener('popstate',handler);
+  },[]);
+
+  // Restore position after data loads (survives page refresh)
+  useEffect(()=>{
+    if(navRestoredRef.current) return;
+    if(!db.projects.length&&!db.goals.length) return;
+    navRestoredRef.current=true;
+    try{
+      const saved=JSON.parse(sessionStorage.getItem('kasa_nav')||'null');
+      if(saved&&saved.view&&saved.view!=='dashboard'){setView(saved.view);setSel(saved.sel||{pid:null,gid_:null});}
+    }catch{}
+  },[db]);
 
   // Load from Supabase
   useEffect(()=>{
@@ -1292,11 +1330,15 @@ function App() {
       // Build the nested structure our app expects
       // Helper to build goal hierarchy recursively (up to 4 levels)
       function buildGoal(g, allGoals, allExpenses, allEntries, depth=0) {
+        // Normalize recurring: legacy object → give it an id so UI can edit/delete
+        let normalRec=g.recurring;
+        if(normalRec&&!Array.isArray(normalRec)&&!normalRec.id) normalRec={...normalRec,id:gid()};
         return {
           ...g,
           target: Number(g.target||0),
           archived: g.archived||false,
           parentId: g.parent_id||null,
+          recurring: normalRec,
           entries: allEntries.filter(e=>e.goal_id===g.id).map(e=>({
             ...e, amount:Number(e.amount), units:Number(e.units||0),
             date: e.date, recurring: e.is_recurring
@@ -1624,7 +1666,9 @@ function expCost(exp) {
   }
 
   function GCard({goal, pid=null}) {
-    const earned=sumGoalTotal(goal);
+    const grossIncome=sumGoalTotal(goal);
+    const expTotal=goalExpTotal(goal);
+    const earned=grossIncome-expTotal;
     const pct=Math.min(100,(earned/Math.max(goal.target,1))*100);
     const c=(CAT[goal.category]||CAT.other).color;
     const s=streak(goal.entries);
@@ -1649,7 +1693,7 @@ function expCost(exp) {
         <div style={{display:"flex",gap:4}}>
           {!goal._general&&<span style={{fontSize:11,color:onTrack?"#5A9E6F":"#E07840"}}>{onTrack?"✓":"⚠"}</span>}
           {s>0&&<span style={{fontSize:11,background:"#A02218",color:"#FAF7F0",borderRadius:4,padding:"2px 4px"}}>🔥{s}</span>}
-          {goal.recurring&&goal.recurring.enabled&&<span style={{fontSize:11,background:"#8B1A0F",color:"#FAF7F0",borderRadius:4,padding:"2px 4px"}}>↻</span>}
+          {(Array.isArray(goal.recurring)?goal.recurring.some(r=>r.enabled):(goal.recurring&&goal.recurring.enabled))&&<span style={{fontSize:11,background:"#8B1A0F",color:"#FAF7F0",borderRadius:4,padding:"2px 4px"}}>↻</span>}
         </div>
       </div>
     </div>;
@@ -1820,7 +1864,19 @@ function expCost(exp) {
       })()}
       onMove={(toGoalId)=>{moveEntry(mod.editEntry.entry,mod.editEntry.gid_,toGoalId,mod.editEntry.pid);}}
       onClose={()=>setMod(m=>({...m,editEntry:null}))} onSave={updated=>{updGoal(mod.editEntry.gid_,g=>({...g,entries:(g.entries||[]).map(e=>e.id===updated.id?updated:e).sort((a,b)=>b.date.localeCompare(a.date))}),mod.editEntry.pid);db_.update('entries',updated.id,{amount:updated.amount,note:updated.note||null,date:updated.date,source:updated.source,units:updated.units||0}).catch(console.error);setMod(m=>({...m,editEntry:null}));toast_("Updated ✦");}}/>}
-    {mod.recur&&<RecurModal initial={mod.recur.data} onClose={()=>setMod(m=>({...m,recur:null}))} onSave={r=>{const rec={...r,lastApplied:today()};updGoal(mod.recur.gid_,g=>({...g,recurring:rec}),mod.recur.pid);db_.update('goals',mod.recur.gid_,{recurring:rec}).catch(e=>console.error('Recurring save failed:',e));setMod(m=>({...m,recur:null}));toast_("Recurring saved ✦");}}/>}
+    {mod.recur&&<RecurModal initial={mod.recur.data} onClose={()=>setMod(m=>({...m,recur:null}))} onSave={r=>{
+      const newRule={...r,id:mod.recur.ruleId||gid(),lastApplied:today()};
+      updGoal(mod.recur.gid_,g=>{
+        const rawRec=g.recurring;
+        // Normalize to array
+        let rules=Array.isArray(rawRec)?[...rawRec]:(rawRec&&rawRec.enabled?[{...rawRec,id:rawRec.id||gid()}]:[]);
+        if(mod.recur.ruleId) rules=rules.map(ru=>ru.id===mod.recur.ruleId?newRule:ru);
+        else rules=[...rules,newRule];
+        return {...g,recurring:rules};
+      },mod.recur.pid);
+      updGoal(mod.recur.gid_,g=>{ db_.update('goals',mod.recur.gid_,{recurring:g.recurring}).catch(e=>console.error('Recurring save failed:',e)); return g; },mod.recur.pid);
+      setMod(m=>({...m,recur:null}));toast_("Recurring saved ✦");
+    }}/>}
     {mod.report&&<ReportModal content={mod.report.content} type={mod.report.type} onClose={()=>setMod(m=>({...m,report:null}))} onDownload={()=>{dlReport(mod.report.type,db);setMod(m=>({...m,report:null}));}}/>}
 
 
@@ -1932,7 +1988,20 @@ function expCost(exp) {
             })}));
           }
           if(uid) db_.insert("entries",{id:entry.id,user_id:uid,goal_id:targetGoalId||null,project_id:pid,amount:finalTotal,source:posPayment,note:finalNoteStr||noteStr,date:posDate||today(),units:totalUnits}).catch(console.error);
-          setPosMode(false); setCart([]); toast_(`Sale saved — ${fmtGBP(finalTotal)} ✦`);
+          // Auto-register new model names typed in POS as products
+          if(pid) {
+            const typedNames=[...new Set(Object.values(posModelLines).map(v=>(v||"").trim()).filter(Boolean))];
+            const existingNames=((selProj&&selProj.products)||[]).map(p=>p.name.toLowerCase());
+            const newNames=typedNames.filter(n=>!existingNames.includes(n.toLowerCase()));
+            if(newNames.length>0){
+              const newProds=newNames.map(name=>({id:gid(),name,unit_cost:0,unit:"pair",is_premium:false}));
+              setDb(d=>({...d,projects:d.projects.map(p=>p.id!==pid?p:{...p,products:[...(p.products||[]),...newProds]})}));
+              newProds.forEach(prod=>{
+                if(uid) db_.insert('products',{id:prod.id,user_id:uid,project_id:pid,name:prod.name,unit_cost:0,unit:'pair',is_premium:false}).catch(console.error);
+              });
+            }
+          }
+          setPosMode(false); setCart([]); setPosModelLines({}); toast_(`Sale saved — ${fmtGBP(finalTotal)} ✦`);
         }
 
         return (
@@ -2125,7 +2194,8 @@ function expCost(exp) {
             const allE=pg.flatMap(g=>g.entries||[]);
             const ec=(p.expenses||[]).reduce((s,e)=>s+expCost(e),0);
             const pc=(p.products||[]).reduce((s,pr)=>s+prodCost(pr,allE),0);
-            const net=inc-ec-pc;
+            const gc=pg.reduce((s,g)=>s+goalExpTotal(g),0);
+            const net=inc-ec-pc-gc;
             return <div key={p.id} style={{...S.card,cursor:"pointer"}} className="hov" onClick={()=>goPrj(p.id)}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                 <div>
@@ -2175,12 +2245,13 @@ function expCost(exp) {
       const inc=allE.reduce((s,e)=>s+Number(e.amount),0);
       const ec=(selProj.expenses||[]).reduce((s,e)=>s+expCost(e),0);
       const pc=(selProj.products||[]).reduce((s,pr)=>s+prodCost(pr,allE),0);
-      const net=inc-ec-pc;
+      const gc=(selProj.goals||[]).reduce((s,g)=>s+goalExpTotal(g),0);
+      const net=inc-ec-pc-gc;
       return <div style={S.page}>
         <div style={S.card}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div style={{fontSize:20,fontWeight:700}}>{selProj.name}</div><button style={{background:"rgba(250,247,240,0.15)",border:"1px solid #FAF7F0",color:"#FAF7F0",borderRadius:5,fontSize:11,cursor:"pointer",padding:"4px 9px"}} onClick={()=>setEditingProj({pid:selProj.id,name:selProj.name})}>Edit</button></div>
           <div style={{display:"flex",gap:14,marginTop:10,flexWrap:"wrap"}}>
-            {[{l:"Income",v:fmtGBP(inc),c:"#FAF7F0"},{l:"Expenses",v:fmtGBP(ec+pc),c:"#E07840"},{l:"Net",v:fmtGBP(net),c:net>=0?"#5A9E6F":"#E07840"}].map(({l,v,c})=><div key={l}><div style={{fontSize:13,fontWeight:500,color:"#FAF7F0",letterSpacing:2,textTransform:"uppercase"}}>{l}</div><div style={{fontSize:18,fontWeight:700,color:c,marginTop:1}}>{v}</div></div>)}
+            {[{l:"Income",v:fmtGBP(inc),c:"#FAF7F0"},{l:"Expenses",v:fmtGBP(ec+pc+gc),c:"#E07840"},{l:"Net",v:fmtGBP(net),c:net>=0?"#5A9E6F":"#E07840"}].map(({l,v,c})=><div key={l}><div style={{fontSize:13,fontWeight:500,color:"#FAF7F0",letterSpacing:2,textTransform:"uppercase"}}>{l}</div><div style={{fontSize:18,fontWeight:700,color:c,marginTop:1}}>{v}</div></div>)}
           </div>
         </div>
         <Tabs tabs={["goals","income","expenses","products","insights"]} active={projTab} onChange={setProjTab}/>
@@ -2328,13 +2399,37 @@ function expCost(exp) {
         </>}
         {goalTab==="entries"&&<GoalEntriesView entries={selGoal.entries||[]} sel={sel} products={(selProj&&selProj.products)||[]} setMod={setMod} delEntry={delEntry}/>}
         {goalTab==="insights"&&<GoalInsights goal={selGoal} color={c} showProj={sel&&!!sel.pid} projData={sel&&sel.pid?db.projects.find(p=>p.id===sel.pid):null}/>}
-        {goalTab==="recurring"&&<div style={{background:"#A02218",borderRadius:10,padding:13,border:"1px solid #1C1C1C"}}>
-          <div style={{fontSize:14,color:"#FAF7F0",marginBottom:11}}>Auto-add income on a schedule.</div>
-          <button style={S.btn} onClick={()=>setMod(m=>({...m,recur:{gid_:selGoal.id,pid:sel.pid,data:selGoal.recurring||null}}))}>
-            {selGoal.recurring&&selGoal.recurring.enabled?"Edit Recurring ↻":"Set Up Recurring"}
-          </button>
-          {selGoal.recurring&&selGoal.recurring.enabled&&<div style={{marginTop:9,fontSize:13,color:"#5A9E6F"}}>↻ {selGoal.recurring.freq} · {fmtGBP(selGoal.recurring.amount)}</div>}
-        </div>}
+        {goalTab==="recurring"&&(()=>{
+          const rawRec=selGoal.recurring;
+          const rules=Array.isArray(rawRec)?rawRec:(rawRec&&rawRec.enabled?[{...rawRec,id:rawRec.id||'legacy'}]:[]);
+          function delRule(ruleId){
+            updGoal(selGoal.id,g=>{
+              const rawR=g.recurring;
+              const arr=Array.isArray(rawR)?rawR:(rawR&&rawR.enabled?[{...rawR,id:rawR.id||'legacy'}]:[]);
+              const next=arr.filter(r=>r.id!==ruleId);
+              const newRec=next.length===0?null:next;
+              db_.update('goals',selGoal.id,{recurring:newRec}).catch(console.error);
+              return {...g,recurring:newRec};
+            },sel.pid);
+            toast_("Recurring removed ✦");
+          }
+          return <div style={{background:"#A02218",borderRadius:10,padding:13,border:"1px solid #1C1C1C"}}>
+            <div style={{fontSize:14,color:"#FAF7F0",marginBottom:11}}>Auto-add income on a schedule.</div>
+            {rules.map(rule=>(
+              <div key={rule.id} style={{background:"#721408",borderRadius:8,padding:"10px 12px",marginBottom:8,display:"flex",alignItems:"center",gap:8}}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:13,color:rule.enabled?"#5A9E6F":"#FAD5C8",fontWeight:600}}>↻ {rule.freq} · {fmtGBP(rule.amount)}</div>
+                  {rule.note&&<div style={{fontSize:11,color:"#FAD5C8",marginTop:2}}>{rule.note}</div>}
+                  {!rule.enabled&&<div style={{fontSize:10,color:"#E07840",marginTop:2}}>Disabled</div>}
+                </div>
+                <button style={{background:"rgba(250,247,240,0.15)",border:"1px solid rgba(250,247,240,0.3)",color:"#FAF7F0",borderRadius:5,fontSize:11,cursor:"pointer",padding:"4px 8px"}} onClick={()=>setMod(m=>({...m,recur:{gid_:selGoal.id,pid:sel.pid,data:rule,ruleId:rule.id}}))}>Edit</button>
+                <button style={{background:"rgba(248,113,113,0.2)",border:"1px solid #F87171",color:"#F87171",borderRadius:5,fontSize:11,cursor:"pointer",padding:"4px 8px"}} onClick={()=>delRule(rule.id)}>✕</button>
+              </div>
+            ))}
+            {rules.length===0&&<div style={{color:"#FAD5C8",fontSize:12,marginBottom:10}}>No recurring rules yet.</div>}
+            <button style={S.btn} onClick={()=>setMod(m=>({...m,recur:{gid_:selGoal.id,pid:sel.pid,data:{enabled:true,freq:"weekly",amount:"",note:"",source:"Transfer"},ruleId:null}}))}>+ Add Rule</button>
+          </div>;
+        })()}
         {!selGoal._general&&<div style={{marginTop:16,marginBottom:4}}>
         <button style={{width:"100%",background:"rgba(250,247,240,0.1)",border:"1px solid rgba(250,247,240,0.3)",color:"#FAF7F0",borderRadius:10,padding:"11px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}} onClick={()=>{setGForm({name:"",target:"0",category:"sales",period:"monthly",dateStart:"",dateEnd:""});setView("newSubGoal");}}>
           + Add Sub-goal
