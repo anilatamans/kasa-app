@@ -991,9 +991,40 @@ function RecurModal({initial, onSave, onClose}) {
   </div></div>;
 }
 
-function EditEntryModal({entry, onSave, onClose, availGoals=[], currentGoalId=null, onMove=null}) {
+function EditEntryModal({entry, onSave, onClose, availGoals=[], currentGoalId=null, onMove=null, allModels=[], allProductTypes=[]}) {
   const [e, setE] = useState({...entry});
-  return <div style={S.overlay}><div style={S.modal}>
+  // Parse cart_items
+  const parsedCart = React.useMemo(()=>{
+    if(!entry.cart_items) return null;
+    try{ return typeof entry.cart_items==="string"?JSON.parse(entry.cart_items):entry.cart_items; }
+    catch(_){ return null; }
+  },[entry.cart_items]);
+  // editModels: {"typeId_pairIdx": modelId}
+  const initModels = React.useMemo(()=>{
+    if(!parsedCart) return {};
+    const map={};
+    parsedCart.forEach(ci=>{
+      (ci.models||[]).forEach((m,mi)=>{
+        if(m&&m.id) map[ci.typeId+'_'+mi]=m.id;
+      });
+    });
+    return map;
+  },[parsedCart]);
+  const [editModels, setEditModels] = useState(initModels);
+
+  function buildCartItems(){
+    if(!parsedCart) return null;
+    return parsedCart.map(ci=>({
+      ...ci,
+      models:(ci.models||[]).map((_,mi)=>{
+        const mid=editModels[ci.typeId+'_'+mi];
+        const m=allModels.find(x=>x.id===mid);
+        return m?{id:m.id,name:m.name}:null;
+      })
+    }));
+  }
+
+  return <div style={S.overlay}><div style={{...S.modal,maxHeight:"90vh",overflowY:"auto"}}>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
       <div style={{fontSize:18,fontWeight:700}}>Edit Entry</div>
       <button style={{background:"none",border:"none",color:"#FAF7F0",fontSize:22,cursor:"pointer"}} onClick={onClose}>×</button>
@@ -1003,6 +1034,31 @@ function EditEntryModal({entry, onSave, onClose, availGoals=[], currentGoalId=nu
     <div style={S.field}><label style={S.label}>Source</label><div style={S.chipRow}>{SOURCES.map(s=><Chip key={s} active={e.source===s} onClick={()=>setE(v=>({...v,source:s}))}>{(SRC[s]&&SRC[s].emoji)||"✦"} {s}</Chip>)}</div></div>
     <div style={S.field}><label style={S.label}>Units Sold</label><input style={S.input} type="number" placeholder="0" value={e.units||""} onChange={x=>setE(v=>({...v,units:x.target.value}))}/></div>
     <div style={S.field}><label style={S.label}>Note</label><input style={S.input} value={e.note||""} onChange={x=>setE(v=>({...v,note:x.target.value}))}/></div>
+    {parsedCart&&parsedCart.length>0&&<div style={{marginBottom:14}}>
+      <label style={{display:"block",fontSize:11,letterSpacing:1.5,color:"#FAF7F0",textTransform:"uppercase",marginBottom:8,fontWeight:600}}>Models / Modeller</label>
+      {parsedCart.map(ci=>{
+        const typeModels=allModels.filter(m=>m.product_type_id===ci.typeId&&m.active!==false);
+        return <div key={ci.typeId} style={{marginBottom:10,background:"#721408",borderRadius:8,padding:"9px 11px"}}>
+          <div style={{fontSize:12,fontWeight:700,color:"#FAF7F0",marginBottom:6}}>{ci.typeName} × {ci.qty}</div>
+          {Array.from({length:ci.qty}).map((_,mi)=>{
+            const lineKey=ci.typeId+'_'+mi;
+            const selMid=editModels[lineKey]||"";
+            return <div key={mi} style={{marginBottom:5}}>
+              <div style={{fontSize:10,color:"#FAD5C8",marginBottom:3}}>Pair {mi+1}</div>
+              <div style={{display:"flex",gap:5,alignItems:"center"}}>
+                <select style={{flex:1,background:"#5A1A0A",border:"1px solid rgba(250,247,240,0.35)",borderRadius:7,padding:"5px 8px",color:selMid?"#FAF7F0":"#FAD5C8",fontSize:12,outline:"none",fontFamily:"inherit"}}
+                  value={selMid}
+                  onChange={ev=>setEditModels(v=>({...v,[lineKey]:ev.target.value}))}>
+                  <option value="">— select / seçiniz —</option>
+                  {typeModels.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}
+                </select>
+                {selMid&&<span style={{background:"rgba(250,247,240,0.12)",border:"1px solid rgba(250,247,240,0.3)",borderRadius:6,padding:"4px 8px",fontSize:13,color:"#FAD5C8",cursor:"pointer"}} onClick={()=>setEditModels(v=>{const n={...v};delete n[lineKey];return n;})}>×</span>}
+              </div>
+            </div>;
+          })}
+        </div>;
+      })}
+    </div>}
     {availGoals&&availGoals.length>1&&<div style={{marginBottom:14}}>
       <label style={{display:"block",fontSize:11,letterSpacing:1.5,color:"#FAF7F0",textTransform:"uppercase",marginBottom:7,fontWeight:600}}>Move to Goal</label>
       <div style={{display:"flex",flexDirection:"column",gap:5,maxHeight:140,overflowY:"auto"}}>
@@ -1016,7 +1072,7 @@ function EditEntryModal({entry, onSave, onClose, availGoals=[], currentGoalId=nu
     </div>}
     <div style={{display:"flex",gap:8}}>
       <button style={S.btnGhost} onClick={onClose}>Cancel</button>
-      <button style={S.btn} onClick={()=>onSave({...e,amount:parseFloat(e.amount),units:e.units?parseFloat(e.units):0})}>Save</button>
+      <button style={S.btn} onClick={()=>{const ci=buildCartItems();onSave({...e,amount:parseFloat(e.amount),units:e.units?parseFloat(e.units):0,cart_items:ci?JSON.stringify(ci):e.cart_items});}}>Save</button>
     </div>
   </div></div>;
 }
@@ -1973,13 +2029,15 @@ function expCost(exp) {
     {mod.editEntry&&<EditEntryModal
       entry={mod.editEntry.entry}
       currentGoalId={mod.editEntry.gid_}
+      allModels={(()=>{const pid=mod.editEntry.pid;if(pid){const p=db.projects.find(pr=>pr.id===pid);return p?p.models||[]:[]}return[];})()}
+      allProductTypes={(()=>{const pid=mod.editEntry.pid;if(pid){const p=db.projects.find(pr=>pr.id===pid);return p?p.productTypes||[]:[]}return[];})()}
       availGoals={(()=>{
         const pid=mod.editEntry.pid;
         if(pid){const p=db.projects.find(pr=>pr.id===pid);return (p&&p.goals||[]).filter(g=>!g.archived);}
         return db.goals.filter(g=>!g.archived);
       })()}
       onMove={(toGoalId)=>{moveEntry(mod.editEntry.entry,mod.editEntry.gid_,toGoalId,mod.editEntry.pid);}}
-      onClose={()=>setMod(m=>({...m,editEntry:null}))} onSave={updated=>{updGoal(mod.editEntry.gid_,g=>({...g,entries:(g.entries||[]).map(e=>e.id===updated.id?updated:e).sort((a,b)=>b.date.localeCompare(a.date))}),mod.editEntry.pid);db_.update('entries',updated.id,{amount:updated.amount,note:updated.note||null,date:updated.date,source:updated.source,units:updated.units||0}).catch(console.error);setMod(m=>({...m,editEntry:null}));toast_("Updated ✦");}}/>}
+      onClose={()=>setMod(m=>({...m,editEntry:null}))} onSave={updated=>{updGoal(mod.editEntry.gid_,g=>({...g,entries:(g.entries||[]).map(e=>e.id===updated.id?updated:e).sort((a,b)=>b.date.localeCompare(a.date))}),mod.editEntry.pid);db_.update('entries',updated.id,{amount:updated.amount,note:updated.note||null,date:updated.date,source:updated.source,units:updated.units||0,cart_items:updated.cart_items||null}).catch(console.error);setMod(m=>({...m,editEntry:null}));toast_("Updated ✦");}}/>}
     {mod.recur&&<RecurModal initial={mod.recur.data} onClose={()=>setMod(m=>({...m,recur:null}))} onSave={r=>{
       const newRule={...r,id:mod.recur.ruleId||gid(),lastApplied:today()};
       updGoal(mod.recur.gid_,g=>{
@@ -2182,6 +2240,8 @@ function expCost(exp) {
                         function confirmNewModel(){
                           const nm=posNewModelName.trim();
                           if(!nm){setPosNewModelKey(null);setPosNewModelName("");return;}
+                          const duplicate=typeModels.some(m=>m.name.trim().toLowerCase()===nm.toLowerCase());
+                          if(duplicate){toast_("⚠ Bu isimde bir model zaten var / Model already exists");return;}
                           const newId=gid();
                           const defCost=typePt?Number(typePt.defaultModelCost||0):0;
                           addModel(sel.pid,{id:newId,name:nm,cost:defCost,product_type_id:item.typeId,active:true});
@@ -2195,9 +2255,10 @@ function expCost(exp) {
                               <select style={{flex:1,background:"#5A1A0A",border:"1px solid rgba(250,247,240,0.35)",borderRadius:7,padding:"6px 9px",color:selMid?"#FAF7F0":"#FAD5C8",fontSize:12,outline:"none",fontFamily:"inherit",cursor:"pointer"}}
                                 value={selMid}
                                 onChange={e=>setPosModelLines(v=>({...v,[lineKey]:e.target.value}))}>
-                                <option value="">— seçiniz —</option>
+                                <option value="">— select / seçiniz —</option>
                                 {typeModels.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}
                               </select>
+                              {selMid&&<span style={{background:"rgba(250,247,240,0.12)",border:"1px solid rgba(250,247,240,0.3)",borderRadius:6,padding:"5px 8px",fontSize:13,color:"#FAD5C8",cursor:"pointer",lineHeight:1}} title="Seçimi temizle / Clear selection" onClick={()=>setPosModelLines(v=>{const n={...v};delete n[lineKey];return n;})}>×</span>}
                               <span style={{background:"rgba(250,247,240,0.08)",border:"1px dashed rgba(250,247,240,0.4)",borderRadius:6,padding:"5px 9px",fontSize:11,color:"#FAD5C8",cursor:"pointer",whiteSpace:"nowrap"}} onClick={()=>{setPosNewModelKey(lineKey);setPosNewModelName("");}}>+ New</span>
                             </div>
                             :<div style={{display:"flex",gap:4}}>
