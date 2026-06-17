@@ -559,6 +559,17 @@ function calcSockPrice(qty, isPremium) {
   if(rem===1){total+=8;rem=0;}
   return total;
 }
+function calcTypePrice(ptype, qty) {
+  if(!ptype||qty<=0) return 0;
+  if(ptype.pricing==='fixed') return qty*Number(ptype.unitPrice||ptype.unit_price||0);
+  // bundle pricing
+  const tiers=ptype.bundleTiers||ptype.bundle_tiers||{"1":8,"2":15,"3":20};
+  const t3=Number(tiers["3"]||20), t2=Number(tiers["2"]||15), t1=Number(tiers["1"]||8);
+  let rem=qty, total=0;
+  const threes=Math.floor(rem/3); total+=threes*t3; rem-=threes*3;
+  if(rem===2){total+=t2;}else if(rem===1){total+=t1;}
+  return total;
+}
 function calcCartTotal(cartItems) {
   return cartItems.reduce((s,item)=>{
     const price = item.customPrice !== undefined ? item.customPrice : calcSockPrice(item.qty, item.isPremium);
@@ -1238,7 +1249,12 @@ function App() {
   const [editingGoal, setEditingGoal] = useState(null);
   const [editingProduct, setEditingProduct] = useState(null);
   const [importRef] = useState(()=>({current:null}));
+  const [importTypesRef] = useState(()=>({current:null}));
+  const [importModelsRef] = useState(()=>({current:null}));
   const [viewProduct, setViewProduct] = useState(null); // {productId, pid}
+  const [editingPT, setEditingPT] = useState(null); // {pid, pt:{...}, isNew:bool}
+  const [editingModel, setEditingModel] = useState(null); // {pid, m:{...}, isNew:bool}
+  const [modelFilterType, setModelFilterType] = useState(null); // ptId filter
   const [editingExp, setEditingExp] = useState(null);
 
   const [session, setSession] = useState(()=>{
@@ -1325,12 +1341,13 @@ function App() {
       }
     } catch{}
     try {
-      const [projects, goals, entries, expenses, products] = await Promise.all([
+      const [projects, goals, entries, expenses, productTypes, models] = await Promise.all([
         db_.getAll('projects'),
         db_.getAll('goals'),
         db_.getAll('entries'),
         db_.getAll('expenses'),
-        db_.getAll('products'),
+        db_.getAll('product_types'),
+        db_.getAll('models'),
       ]);
 
       // Build the nested structure our app expects
@@ -1371,9 +1388,10 @@ function App() {
           ...e, amount:Number(e.amount),
           startDate: e.start_date, freq: e.freq||'monthly'
         })),
-        products: (products||[]).filter(pr=>pr.project_id===p.id).map(pr=>({
-          ...pr, unitCost:Number(pr.unit_cost||0)
-        }))
+        productTypes: (productTypes||[]).filter(pt=>pt.project_id===p.id)
+          .sort((a,b)=>(a.sort_order||0)-(b.sort_order||0))
+          .map(pt=>({...pt, unitPrice:Number(pt.unit_price||0), bundleTiers:pt.bundle_tiers||null})),
+        models: (models||[]).filter(m=>m.project_id===p.id).map(m=>({...m, cost:Number(m.cost||0)}))
       };});
 
       const indepGoals = (goals||[]).filter(g=>!g.project_id&&!g.parent_id).map(g=>buildGoal(g,goals||[],expenses||[],entries||[]));
@@ -1517,6 +1535,48 @@ function expCost(exp) {
     if(uid){db_.insert('products',{id:pr.id,user_id:uid,project_id:pid,name:pr.name,unit_cost:pr.unitCost||0,unit:pr.unit||'pair',is_premium:pr.isPremium||false}).catch(e=>console.error('Product save failed:',e));}
     setPForm(EP()); setView("project"); toast_("Product added ✦");
   }
+
+  // ── Product Types CRUD ──────────────────────────────────────
+  function addProductType(pid, pt) {
+    const uid=getUserId(); if(!uid||!pid) return;
+    const newPt={...pt, id:gid(), unitPrice:Number(pt.unitPrice||0)};
+    setDb(d=>({...d,projects:d.projects.map(p=>p.id!==pid?p:{...p,productTypes:[...(p.productTypes||[]),newPt]})}));
+    db_.insert('product_types',{id:newPt.id,user_id:uid,project_id:pid,name:newPt.name,pricing:newPt.pricing,unit_price:newPt.unitPrice,bundle_tiers:newPt.bundleTiers||null,unit:newPt.unit||'pair',sort_order:(newPt.sort_order||0)}).catch(console.error);
+    toast_("Product type added ✦");
+  }
+  function updateProductType(pid, ptId, updates) {
+    setDb(d=>({...d,projects:d.projects.map(p=>p.id!==pid?p:{...p,productTypes:(p.productTypes||[]).map(pt=>pt.id===ptId?{...pt,...updates}:pt)})}));
+    const dbUpdates={name:updates.name,pricing:updates.pricing,unit_price:Number(updates.unitPrice||0),bundle_tiers:updates.bundleTiers||null,unit:updates.unit||'pair'};
+    db_.update('product_types',ptId,dbUpdates).catch(console.error);
+    toast_("Saved ✦");
+  }
+  function delProductType(pid, ptId) {
+    setDb(d=>({...d,projects:d.projects.map(p=>p.id!==pid?p:{...p,
+      productTypes:(p.productTypes||[]).filter(pt=>pt.id!==ptId),
+      models:(p.models||[]).filter(m=>m.product_type_id!==ptId)
+    })}));
+    db_.delete('product_types',ptId).catch(console.error);
+    toast_("Deleted");
+  }
+
+  // ── Models CRUD ─────────────────────────────────────────────
+  function addModel(pid, m) {
+    const uid=getUserId(); if(!uid||!pid) return;
+    const newM={...m, id:gid(), cost:Number(m.cost||0), active:true};
+    setDb(d=>({...d,projects:d.projects.map(p=>p.id!==pid?p:{...p,models:[...(p.models||[]),newM]})}));
+    db_.insert('models',{id:newM.id,user_id:uid,project_id:pid,product_type_id:newM.product_type_id||null,name:newM.name,cost:newM.cost,active:true}).catch(console.error);
+    toast_("Model added ✦");
+  }
+  function updateModel(pid, mId, updates) {
+    setDb(d=>({...d,projects:d.projects.map(p=>p.id!==pid?p:{...p,models:(p.models||[]).map(m=>m.id===mId?{...m,...updates}:m)})}));
+    db_.update('models',mId,{name:updates.name,cost:Number(updates.cost||0),product_type_id:updates.product_type_id||null,active:updates.active!==false}).catch(console.error);
+    toast_("Saved ✦");
+  }
+  function delModel(pid, mId) {
+    setDb(d=>({...d,projects:d.projects.map(p=>p.id!==pid?p:{...p,models:(p.models||[]).filter(m=>m.id!==mId)})}));
+    db_.delete('models',mId).catch(console.error);
+    toast_("Deleted");
+  }
   function delEntry(eid,gid_,pid){updGoal(gid_,g=>({...g,entries:(g.entries||[]).filter(e=>e.id!==eid)}),pid);db_.delete("entries",eid).catch(console.error);toast_("Entry deleted");}
   function saveEditGoal(gid_, pid, updates) {
     updGoal(gid_, g=>({...g,...updates}), pid);
@@ -1599,44 +1659,84 @@ function expCost(exp) {
       db_.update("expenses",exp.id,{name:exp.name,amount:parseFloat(exp.amount),category:exp.category||"Other",freq:exp.freq||"monthly",start_date:exp.startDate||null,note:exp.note||null}).then(()=>toast_("Expense updated ✦")).catch(e=>{console.error("Expense update failed:",e);toast_("Saved locally");});
       setEditingExp(null);
     } catch(e){ console.error(e); setEditingExp(null); }
-  }  function downloadProductTemplate() {
-    const csv = "name,unit_cost,unit,is_premium\nAnkle Socks,1,pair,false\nPremium Merino,2,pair,true";
+  }
+  function downloadTypesTemplate() {
+    const csv = [
+      "name,pricing,unit_price,bundle_1,bundle_2,bundle_3,unit",
+      "Standard Socks,bundle,,8,15,20,pair",
+      "Premium Socks,bundle,,10,18,25,pair",
+      "T-Shirt,fixed,15,,,, item"
+    ].join("\n");
     const blob = new Blob([csv], {type:"text/csv"});
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url; a.download = "kasa_products_template.csv"; a.click();
+    a.href=url; a.download="kasa_product_types_template.csv"; a.click();
     URL.revokeObjectURL(url);
   }
-  function importProductsCSV(file, pid) {
+  function downloadModelsTemplate() {
+    const csv = [
+      "name,product_type,cost",
+      "fuck off,Standard Socks,1.50",
+      "donut worry,Standard Socks,1.50",
+      "panda,Premium Socks,2.00"
+    ].join("\n");
+    const blob = new Blob([csv], {type:"text/csv"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href=url; a.download="kasa_models_template.csv"; a.click();
+    URL.revokeObjectURL(url);
+  }
+  function importTypesCSV(file, pid) {
     const uid = getUserId();
     if(!file||!pid||!uid) return;
     const reader = new FileReader();
     reader.onload = e => {
       const lines = e.target.result.split("\n").filter(l=>l.trim());
       const header = lines[0].toLowerCase().split(",").map(h=>h.trim());
-      const nameIdx = header.indexOf("name");
-      const costIdx = header.indexOf("unit_cost");
-      const unitIdx = header.indexOf("unit");
-      const premIdx = header.indexOf("is_premium");
-      if(nameIdx<0||costIdx<0) { toast_("Invalid CSV — need name and unit_cost columns"); return; }
-      let added = 0;
-      const newProds = [];
+      const col = k => header.indexOf(k);
+      if(col("name")<0) { toast_("CSV: 'name' column required"); return; }
+      let added=0;
       lines.slice(1).forEach(line => {
-        const cols = line.split(",").map(c=>c.trim().replace(/^"|"$/g,""));
-        const name = cols[nameIdx];
-        const cost = parseFloat(cols[costIdx]||"0");
-        const unit = unitIdx>=0 ? cols[unitIdx]||"pair" : "pair";
-        const isPrem = premIdx>=0 ? (cols[premIdx]||"").toLowerCase()==="true" : false;
-        if(!name) return;
-        const pr = {id:gid(),name,unitCost:cost,unit,isPremium:isPrem,unit_cost:cost,is_premium:isPrem};
-        newProds.push(pr);
-        db_.insert("products",{id:pr.id,user_id:uid,project_id:pid,name,unit_cost:cost,unit,is_premium:isPrem}).catch(console.error);
+        const c = line.split(",").map(x=>x.trim().replace(/^"|"$/g,""));
+        const name = c[col("name")]; if(!name) return;
+        const pricing = (c[col("pricing")]||"bundle").toLowerCase()==="fixed"?"fixed":"bundle";
+        const unitPrice = pricing==="fixed" ? parseFloat(c[col("unit_price")]||"0") : 0;
+        const b1 = parseFloat(c[col("bundle_1")]||"8");
+        const b2 = parseFloat(c[col("bundle_2")]||"15");
+        const b3 = parseFloat(c[col("bundle_3")]||"20");
+        const bundleTiers = pricing==="bundle" ? {"1":b1,"2":b2,"3":b3} : null;
+        const unit = col("unit")>=0 ? (c[col("unit")]||"pair") : "pair";
+        addProductType(pid, {name, pricing, unitPrice, bundleTiers, unit, sort_order:added});
         added++;
       });
-      if(newProds.length) {
-        setDb(d=>({...d,projects:d.projects.map(p=>p.id===pid?{...p,products:[...(p.products||[]),...newProds]}:p)}));
-        toast_(`${added} products imported ✦`);
-      }
+      if(added) toast_(`${added} product types imported ✦`);
+      else toast_("No valid rows found");
+    };
+    reader.readAsText(file);
+  }
+  function importModelsCSV(file, pid) {
+    const uid = getUserId();
+    if(!file||!pid||!uid) return;
+    const reader = new FileReader();
+    reader.onload = e => {
+      const lines = e.target.result.split("\n").filter(l=>l.trim());
+      const header = lines[0].toLowerCase().split(",").map(h=>h.trim());
+      const col = k => header.indexOf(k);
+      if(col("name")<0) { toast_("CSV: 'name' column required"); return; }
+      const proj = db.projects.find(p=>p.id===pid);
+      const pts = (proj&&proj.productTypes)||[];
+      let added=0;
+      lines.slice(1).forEach(line => {
+        const c = line.split(",").map(x=>x.trim().replace(/^"|"$/g,""));
+        const name = c[col("name")]; if(!name) return;
+        const cost = col("cost")>=0 ? parseFloat(c[col("cost")]||"0") : 0;
+        const typeName = col("product_type")>=0 ? c[col("product_type")] : "";
+        const pt = typeName ? pts.find(p=>p.name.toLowerCase()===typeName.toLowerCase()) : null;
+        addModel(pid, {name, cost, product_type_id: pt?pt.id:null, active:true});
+        added++;
+      });
+      if(added) toast_(`${added} models imported ✦`);
+      else toast_("No valid rows found");
     };
     reader.readAsText(file);
   }
@@ -1831,7 +1931,7 @@ function expCost(exp) {
           }}>Save</button>
         </div>
       </div>
-    </div>}}
+    </div>}
     {mod.moveGoal&&(()=>{
       const {goalId, pid} = mod.moveGoal;
       const destinations = [
@@ -1945,40 +2045,58 @@ function expCost(exp) {
 
       {/* ── POS SALE MODAL ── */}
       {posMode&&selProj&&(()=>{
-        const prods = selProj.products||[];
-        const total = calcCartTotal(cart);
+        const pts = selProj.productTypes||[];
+        const allModels = selProj.models||[];
+        // cart item: {typeId, typeName, pricing, bundleTiers, unitPrice, unit, qty}
+        // posModelLines: {"typeId_pairIdx": modelId}
+        const total = cart.reduce((s,i)=>s+calcTypePrice({pricing:i.pricing,unitPrice:i.unitPrice,bundleTiers:i.bundleTiers},i.qty),0);
         const discount = parseFloat(posDiscount)||0;
         const finalTotal = Math.max(0, total - discount);
 
-        function addToCart(prod) {
+        function addToCart(pt) {
           setCart(prev=>{
-            const existing = prev.find(i=>i.productId===prod.id);
-            if(existing) {
-              return prev.map(i=>i.productId===prod.id?{...i,qty:i.qty+1}:i);
-            }
-            return [...prev, {productId:prod.id,name:prod.name,isPremium:prod.is_premium||prod.isPremium,qty:1,customPrice:undefined}];
+            const existing = prev.find(i=>i.typeId===pt.id);
+            if(existing) return prev.map(i=>i.typeId===pt.id?{...i,qty:i.qty+1}:i);
+            return [...prev, {typeId:pt.id,typeName:pt.name,pricing:pt.pricing,bundleTiers:pt.bundleTiers||null,unitPrice:Number(pt.unitPrice||0),unit:pt.unit||"pair",qty:1}];
           });
         }
-        function removeFromCart(productId) {
+        function removeFromCart(typeId) {
           setCart(prev=>{
-            const item = prev.find(i=>i.productId===productId);
+            const item = prev.find(i=>i.typeId===typeId);
             if(!item) return prev;
-            if(item.qty <= 1) return prev.filter(i=>i.productId!==productId);
-            return prev.map(i=>i.productId===productId?{...i,qty:i.qty-1}:i);
+            if(item.qty<=1){
+              // also clear model lines for this type
+              setPosModelLines(v=>{const next={...v};Object.keys(next).forEach(k=>{if(k.startsWith(typeId+'_'))delete next[k];});return next;});
+              return prev.filter(i=>i.typeId!==typeId);
+            }
+            // remove last pair's model selection
+            const newQty=item.qty-1;
+            setPosModelLines(v=>{const next={...v};delete next[typeId+'_'+newQty];return next;});
+            return prev.map(i=>i.typeId===typeId?{...i,qty:newQty}:i);
           });
         }
         function completeSale() {
           if(cart.length===0) return;
           const uid = getUserId();
           const totalUnits = cart.reduce((s,i)=>s+i.qty,0);
-          const noteStr = posNote || cart.map(i=>`${i.qty}x ${i.name}`).join(", ");
-          const modelNotes = Object.values(posModelLines).filter(v=>v&&v.trim()).join(", ");
-          const finalNoteStr = modelNotes ? (noteStr ? noteStr+" · "+modelNotes : modelNotes) : noteStr;
+          const cartItemsData = cart.map(item=>{
+            const lineTotal=calcTypePrice({pricing:item.pricing,unitPrice:item.unitPrice,bundleTiers:item.bundleTiers},item.qty);
+            const models=Array.from({length:item.qty},(_,mi)=>{
+              const mid=posModelLines[item.typeId+'_'+mi];
+              if(!mid) return null;
+              const m=allModels.find(m=>m.id===mid);
+              return m?{modelId:m.id,name:m.name,cost:m.cost}:null;
+            });
+            return {typeId:item.typeId,typeName:item.typeName,qty:item.qty,lineTotal,models};
+          });
+          const noteStr = posNote || cart.map(i=>`${i.qty}x ${i.typeName}`).join(", ");
+          const modelLabels=cartItemsData.flatMap(ci=>ci.models.filter(Boolean).map(m=>m.name));
+          const finalNoteStr=modelLabels.length?noteStr+" · "+modelLabels.join(", "):noteStr;
           const entry = {
-            id:gid(), amount:finalTotal, note:finalNoteStr||noteStr,
+            id:gid(), amount:finalTotal, note:finalNoteStr,
             source:posPayment, date:posDate||today(), ts:Date.now(),
             units:totalUnits, productId:null,
-            cartItems: cart.map(i=>({productId:i.productId,name:i.name,qty:i.qty,price:calcSockPrice(i.qty,i.isPremium)}))
+            cartItems: cartItemsData
           };
           const targetGoalId = posGoalId;
           const pid = sel.pid;
@@ -1993,7 +2111,7 @@ function expCost(exp) {
               return {...p,goals:[...rest,{...gen,entries:[...(gen.entries||[]),entry].sort((a,b)=>b.date.localeCompare(a.date))}]};
             })}));
           }
-          if(uid) db_.insert("entries",{id:entry.id,user_id:uid,goal_id:targetGoalId||null,project_id:pid,amount:finalTotal,source:posPayment,note:finalNoteStr||noteStr,date:posDate||today(),units:totalUnits}).catch(console.error);
+          if(uid) db_.insert("entries",{id:entry.id,user_id:uid,goal_id:targetGoalId||null,project_id:pid,amount:finalTotal,source:posPayment,note:finalNoteStr,date:posDate||today(),units:totalUnits,cart_items:JSON.stringify(cartItemsData)}).catch(console.error);
           setPosMode(false); setCart([]); setPosModelLines({}); toast_(`Sale saved — ${fmtGBP(finalTotal)} ✦`);
         }
 
@@ -2007,18 +2125,18 @@ function expCost(exp) {
             </div>
 
             <div style={{flex:1,overflowY:"auto",padding:"14px 14px 0"}}>
-              {/* Products */}
-              {prods.length===0
-                ?<div style={{color:"#FAD5C8",fontSize:13,textAlign:"center",padding:"24px 0"}}>No products — add products in the Products tab first</div>
+              {/* Product Type Buttons */}
+              {pts.length===0
+                ?<div style={{color:"#FAD5C8",fontSize:13,textAlign:"center",padding:"24px 0"}}>No product types — add them in the Products tab first</div>
                 :<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
-                  {prods.map(pr=>{
-                    const inCart = cart.find(i=>i.productId===pr.id);
-                    const isPrem = pr.is_premium||pr.isPremium;
+                  {pts.map(pt=>{
+                    const inCart=cart.find(i=>i.typeId===pt.id);
+                    const priceLabel=pt.pricing==="fixed"?`£${Number(pt.unitPrice||0).toFixed(2)}/${pt.unit||"pair"}`:(()=>{const t=pt.bundleTiers||{"1":8,"2":15,"3":20};return `£${t["1"]}/£${t["2"]}/£${t["3"]}`;})();
                     return (
-                      <div key={pr.id} style={{background:inCart?"#5A2A1A":"#721408",border:`1px solid ${inCart?"#FAF7F0":"rgba(250,247,240,0.2)"}`,borderRadius:10,padding:"12px",cursor:"pointer",transition:"all 0.15s"}}
-                        onClick={()=>addToCart(pr)}>
-                        <div style={{fontSize:13,fontWeight:600,color:"#FAF7F0",marginBottom:3}}>{pr.name}</div>
-                        <div style={{fontSize:11,color:isPrem?"#FFD700":"#FAD5C8"}}>{isPrem?"★ Premium · £10":"Standard"}</div>
+                      <div key={pt.id} style={{background:inCart?"#5A2A1A":"#721408",border:`1px solid ${inCart?"#FAF7F0":"rgba(250,247,240,0.2)"}`,borderRadius:10,padding:"12px",cursor:"pointer",transition:"all 0.15s"}}
+                        onClick={()=>addToCart(pt)}>
+                        <div style={{fontSize:13,fontWeight:600,color:"#FAF7F0",marginBottom:3}}>{pt.name}</div>
+                        <div style={{fontSize:11,color:"#FAD5C8"}}>{priceLabel}</div>
                         {inCart&&<div style={{marginTop:6,fontSize:14,fontWeight:700,color:"#FAF7F0",textAlign:"center"}}>× {inCart.qty}</div>}
                       </div>
                     );
@@ -2030,34 +2148,31 @@ function expCost(exp) {
               {cart.length>0&&<>
                 <div style={{fontSize:10,letterSpacing:2,color:"#FAD5C8",textTransform:"uppercase",marginBottom:8}}>Cart</div>
                 {cart.map(item=>{
-                  const linePrice = calcSockPrice(item.qty, item.isPremium);
+                  const linePrice=calcTypePrice({pricing:item.pricing,unitPrice:item.unitPrice,bundleTiers:item.bundleTiers},item.qty);
+                  const typeModels=allModels.filter(m=>m.product_type_id===item.typeId&&m.active!==false);
                   return (
-                    <React.Fragment key={item.productId}>
+                    <React.Fragment key={item.typeId}>
                     <div style={{display:"flex",alignItems:"center",background:"#721408",borderRadius:8,padding:"10px 12px",marginBottom:5}}>
                       <div style={{flex:1}}>
-                        <div style={{fontSize:13,color:"#FAF7F0",fontWeight:600}}>{item.name}</div>
-                        <div style={{fontSize:11,color:"#FAD5C8"}}>{item.isPremium?"£10/pair":"auto-price"}</div>
+                        <div style={{fontSize:13,color:"#FAF7F0",fontWeight:600}}>{item.typeName}</div>
                       </div>
                       <div style={{display:"flex",alignItems:"center",gap:8}}>
-                        <button style={{background:"rgba(250,247,240,0.2)",border:"none",color:"#FAF7F0",width:28,height:28,borderRadius:6,fontSize:16,cursor:"pointer"}} onClick={()=>removeFromCart(item.productId)}>−</button>
+                        <button style={{background:"rgba(250,247,240,0.2)",border:"none",color:"#FAF7F0",width:28,height:28,borderRadius:6,fontSize:16,cursor:"pointer"}} onClick={()=>removeFromCart(item.typeId)}>−</button>
                         <span style={{fontSize:14,fontWeight:700,color:"#FAF7F0",minWidth:20,textAlign:"center"}}>{item.qty}</span>
-                        <button style={{background:"rgba(250,247,240,0.2)",border:"none",color:"#FAF7F0",width:28,height:28,borderRadius:6,fontSize:16,cursor:"pointer"}} onClick={()=>addToCart(selProj.products.find(p=>p.id===item.productId))}>+</button>
+                        <button style={{background:"rgba(250,247,240,0.2)",border:"none",color:"#FAF7F0",width:28,height:28,borderRadius:6,fontSize:16,cursor:"pointer"}} onClick={()=>addToCart(pts.find(p=>p.id===item.typeId)||item)}>+</button>
                         <span style={{fontSize:14,fontWeight:700,color:"#FAF7F0",minWidth:40,textAlign:"right"}}>{fmtGBP(linePrice)}</span>
                       </div>
                     </div>
-                    {item.qty>0&&<div style={{marginTop:4}}>
+                    {item.qty>0&&typeModels.length>0&&<div style={{marginBottom:8,marginTop:2}}>
                       {Array.from({length:item.qty}).map((_,mi)=>{
-                        const lineKey=item.productId+'_'+mi;
-                        const val=(posModelLines[lineKey]||"");
-                        const existingModels=((selProj&&selProj.products)||[]).map(p=>p.name);
-                        return <div key={mi} style={{marginBottom:3}}>
-                          <input style={{width:"100%",background:"#8B1A0F",border:"1px solid rgba(250,247,240,0.2)",borderRadius:7,padding:"6px 10px",color:"#FAF7F0",fontSize:11,outline:"none",boxSizing:"border-box",fontFamily:"inherit"}}
-                            placeholder={`Pair ${mi+1} model (optional)`}
-                            value={val}
-                            onChange={e=>{setPosModelLines(v=>({...v,[lineKey]:e.target.value}));}}/>
-                          {val.length===0&&existingModels.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:3,marginTop:2}}>
-                            {existingModels.map(p=><span key={p} style={{background:"#721408",border:"1px solid rgba(250,247,240,0.25)",borderRadius:4,padding:"1px 7px",fontSize:9,color:"#FAD5C8",cursor:"pointer"}} onClick={()=>setPosModelLines(v=>({...v,[lineKey]:p}))}>{p}</span>)}
-                          </div>}
+                        const lineKey=item.typeId+'_'+mi;
+                        const selMid=posModelLines[lineKey]||"";
+                        return <div key={mi} style={{marginBottom:4}}>
+                          <div style={{fontSize:10,color:"#FAD5C8",marginBottom:3}}>{item.unit||"Pair"} {mi+1} model</div>
+                          <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                            <span style={{background:!selMid?"#FAF7F0":"rgba(250,247,240,0.1)",border:"1px solid rgba(250,247,240,0.3)",borderRadius:5,padding:"2px 8px",fontSize:10,color:!selMid?"#8B1A0F":"#FAD5C8",cursor:"pointer"}} onClick={()=>setPosModelLines(v=>{const n={...v};delete n[lineKey];return n;})}>—</span>
+                            {typeModels.map(m=><span key={m.id} style={{background:selMid===m.id?"#FAF7F0":"rgba(250,247,240,0.1)",border:"1px solid rgba(250,247,240,0.3)",borderRadius:5,padding:"2px 8px",fontSize:10,color:selMid===m.id?"#8B1A0F":"#FAD5C8",cursor:"pointer"}} onClick={()=>setPosModelLines(v=>({...v,[lineKey]:m.id}))}>{m.name}</span>)}
+                          </div>
                         </div>;
                       })}
                     </div>}
@@ -2117,7 +2232,8 @@ function expCost(exp) {
                       <div key={g.id} style={{background:posGoalId===g.id?"rgba(250,247,240,0.15)":"#721408",border:`1px solid ${posGoalId===g.id?"#FAF7F0":"rgba(250,247,240,0.2)"}`,borderRadius:7,padding:"8px 12px",fontSize:12,cursor:"pointer",color:"#FAF7F0",fontWeight:posGoalId===g.id?700:400}}
                         onClick={()=>setPosGoalId(g.id)}>{g._label}</div>
                     ));
-                  })()}                </div>
+                  })()}
+                </div>
               </div>}
 
               <div style={{marginBottom:16}}>
@@ -2296,27 +2412,132 @@ function expCost(exp) {
           </div>)}
           {(selProj.expenses||[]).length>0&&<div style={{marginTop:9,padding:"9px 11px",background:"#B02A1E",borderRadius:8,display:"flex",justifyContent:"space-between"}}><span style={{fontSize:13,fontWeight:500,color:"#FAF7F0"}}>Total</span><span style={{fontSize:15,fontWeight:700,color:"#E07840"}}>{fmtGBP(ec)}</span></div>}
         </>}
-        {projTab==="products"&&<>
-          <div style={{display:"flex",gap:8,marginBottom:11}}>
-            <button style={{...S.btn,flex:1}} onClick={()=>{setPForm(EP());setView("newProduct");}}>+ Add Product</button>
-            <button style={{background:"transparent",border:"1px solid #FAF7F0",color:"#FAF7F0",borderRadius:10,padding:"11px 14px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}} onClick={downloadProductTemplate}>↓ Template</button>
-            <button style={{background:"transparent",border:"1px solid #FAF7F0",color:"#FAF7F0",borderRadius:10,padding:"11px 14px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}} onClick={()=>importRef.current&&importRef.current.click()}>↑ Import</button>
-          </div>
-          <input ref={el=>importRef.current=el} type="file" accept=".csv" style={{display:"none"}} onChange={e=>{const f=e.target.files[0];if(f){importProductsCSV(f,selProj.id);e.target.value="";}}}/>
-          {(selProj.products||[]).length===0&&<div style={{color:"#FAF7F0",fontSize:14,textAlign:"center",padding:"20px 0"}}>No products yet</div>}
-          {(selProj.products||[]).map(pr=>{
-            const sold=(selProj.products||[]).length===1?allE.reduce((s,e)=>s+Number(e.units||0),0):allE.filter(e=>e.productId===pr.id).reduce((s,e)=>s+Number(e.units||0),0);
-            return <div key={pr.id} style={S.entryRow}>
-              <div style={{minWidth:56,flexShrink:0}}><div style={{fontSize:13,fontWeight:500,color:"#FAF7F0"}}>{pr.unit}</div><div style={{fontSize:11,color:"#FAF7F0"}}>£{pr.unitCost}</div></div>
-              <div style={{flex:1,fontSize:13,fontWeight:500,color:"#FAF7F0"}}>{pr.name}</div>
-              <div style={{textAlign:"right",flexShrink:0,marginRight:6}}><div style={{fontSize:13,color:"#FAF7F0",fontWeight:700}}>{sold} sold</div><div style={{fontSize:13,fontWeight:500,color:"#FAF7F0"}}>{fmtGBP(sold*pr.unitCost)}</div></div>
-              <button style={{background:"rgba(250,247,240,0.2)",border:"1px solid rgba(250,247,240,0.5)",color:"#FAF7F0",borderRadius:5,fontSize:11,cursor:"pointer",padding:"3px 7px",marginRight:4}} onClick={()=>setEditingProduct({pid:selProj.id,prod:{...pr,unitCost:pr.unitCost||pr.unit_cost||0,isPremium:pr.isPremium||pr.is_premium||false}})}>Edit</button>
-              <button style={{background:"rgba(250,247,240,0.1)",border:"1px solid rgba(250,247,240,0.3)",color:"#FAF7F0",borderRadius:5,fontSize:11,cursor:"pointer",padding:"3px 7px",marginRight:4}} onClick={()=>setViewProduct({productId:pr.id,pid:selProj.id,name:pr.name})}>Details</button>
-              <button style={{background:"none",border:"none",color:"#FAF7F0",fontSize:17,cursor:"pointer",padding:"0 2px",opacity:0.5}} onClick={()=>delProd(selProj.id,pr.id)}>×</button>
-            </div>;
-          })}
-          {pc>0&&<div style={{marginTop:9,padding:"9px 11px",background:"#B02A1E",borderRadius:8,display:"flex",justifyContent:"space-between"}}><span style={{fontSize:13,fontWeight:500,color:"#FAF7F0"}}>Total product cost</span><span style={{fontSize:15,fontWeight:700,color:"#FAF7F0"}}>{fmtGBP(pc)}</span></div>}
-        </>}
+        {projTab==="products"&&(()=>{
+          const pts=selProj.productTypes||[];
+          const mods=selProj.models||[];
+          const visModels=modelFilterType?mods.filter(m=>m.product_type_id===modelFilterType):mods;
+          const btnSm={background:"rgba(250,247,240,0.15)",border:"1px solid rgba(250,247,240,0.4)",color:"#FAF7F0",borderRadius:6,fontSize:11,cursor:"pointer",padding:"3px 8px"};
+          const inpSt={width:"100%",background:"#8B1A0F",border:"1px solid rgba(250,247,240,0.5)",borderRadius:8,padding:"9px 11px",color:"#FAF7F0",fontSize:13,outline:"none",boxSizing:"border-box",fontFamily:"inherit"};
+          const fmtPricing=(pt)=>{
+            if(!pt) return "";
+            if(pt.pricing==="fixed") return `£${Number(pt.unitPrice||0).toFixed(2)}/${pt.unit||"pair"}`;
+            const t=pt.bundleTiers||{"1":8,"2":15,"3":20};
+            return `£${t["1"]}/£${t["2"]}/£${t["3"]} bundle`;
+          };
+          return <>
+            {/* ── PRODUCT TYPES ── */}
+            <input ref={el=>importTypesRef.current=el} type="file" accept=".csv" style={{display:"none"}} onChange={e=>{const f=e.target.files[0];if(f){importTypesCSV(f,selProj.id);e.target.value='';}}}/>
+            <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:8}}>
+              <span style={{color:"#FAF7F0",fontSize:13,fontWeight:600,opacity:0.7,textTransform:"uppercase",letterSpacing:1,flex:1}}>Product Types</span>
+              <button style={btnSm} onClick={downloadTypesTemplate}>↓ Template</button>
+              <button style={btnSm} onClick={()=>importTypesRef.current&&importTypesRef.current.click()}>↑ Import</button>
+              <button style={{...btnSm,fontSize:12,padding:"4px 10px"}} onClick={()=>setEditingPT({pid:selProj.id,isNew:true,pt:{name:"",pricing:"bundle",unitPrice:0,bundleTiers:{"1":8,"2":15,"3":20},unit:"pair"}})}>+ Add Type</button>
+            </div>
+            {pts.length===0&&!editingPT&&<div style={{color:"rgba(250,247,240,0.5)",fontSize:13,textAlign:"center",padding:"10px 0 14px"}}>No product types yet</div>}
+            {pts.map(pt=>{
+              const isEditing=editingPT&&!editingPT.isNew&&editingPT.pt.id===pt.id;
+              if(isEditing){
+                const ep=editingPT.pt;
+                return <div key={pt.id} style={{background:"rgba(0,0,0,0.2)",borderRadius:10,padding:11,marginBottom:8}}>
+                  <input style={{...inpSt,marginBottom:7}} placeholder="Type name" value={ep.name} onChange={e=>setEditingPT(v=>({...v,pt:{...v.pt,name:e.target.value}}))}/>
+                  <div style={{display:"flex",gap:6,marginBottom:7}}>
+                    <div style={{flex:1,background:ep.pricing==="bundle"?"#FAF7F0":"transparent",border:"1px solid #FAF7F0",borderRadius:7,padding:"7px",textAlign:"center",cursor:"pointer",color:ep.pricing==="bundle"?"#8B1A0F":"#FAF7F0",fontSize:12,fontWeight:ep.pricing==="bundle"?700:400}} onClick={()=>setEditingPT(v=>({...v,pt:{...v.pt,pricing:"bundle"}}))}>Bundle</div>
+                    <div style={{flex:1,background:ep.pricing==="fixed"?"#FAF7F0":"transparent",border:"1px solid #FAF7F0",borderRadius:7,padding:"7px",textAlign:"center",cursor:"pointer",color:ep.pricing==="fixed"?"#8B1A0F":"#FAF7F0",fontSize:12,fontWeight:ep.pricing==="fixed"?700:400}} onClick={()=>setEditingPT(v=>({...v,pt:{...v.pt,pricing:"fixed"}}))}>Fixed</div>
+                  </div>
+                  {ep.pricing==="fixed"?<input type="number" style={{...inpSt,marginBottom:7}} placeholder="Price per unit (£)" value={ep.unitPrice} onChange={e=>setEditingPT(v=>({...v,pt:{...v.pt,unitPrice:e.target.value}}))}/>
+                    :<div style={{display:"flex",gap:6,marginBottom:7}}>
+                      {["1","2","3"].map(k=><input key={k} type="number" style={{...inpSt}} placeholder={`${k} pair £`} value={(ep.bundleTiers||{})[k]||""} onChange={e=>setEditingPT(v=>({...v,pt:{...v.pt,bundleTiers:{...(v.pt.bundleTiers||{}), [k]:e.target.value}}}))}/>)}
+                    </div>}
+                  <input style={{...inpSt,marginBottom:8}} placeholder="Unit label (pair, item…)" value={ep.unit||""} onChange={e=>setEditingPT(v=>({...v,pt:{...v.pt,unit:e.target.value}}))}/>
+                  <div style={{display:"flex",gap:6}}>
+                    <button style={{flex:1,background:"transparent",border:"1px solid #FAF7F0",color:"#FAF7F0",borderRadius:8,padding:"8px",fontSize:12,cursor:"pointer"}} onClick={()=>setEditingPT(null)}>Cancel</button>
+                    <button style={{flex:1,background:"#FAF7F0",color:"#8B1A0F",border:"none",borderRadius:8,padding:"8px",fontSize:12,fontWeight:700,cursor:"pointer"}} onClick={()=>{if(!ep.name) return;updateProductType(selProj.id,ep.id,{name:ep.name,pricing:ep.pricing,unitPrice:Number(ep.unitPrice||0),bundleTiers:ep.pricing==="bundle"?ep.bundleTiers:null,unit:ep.unit||"pair"});setEditingPT(null);}}>Save</button>
+                  </div>
+                </div>;
+              }
+              return <div key={pt.id} style={{...S.entryRow,marginBottom:6}}>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:13,fontWeight:600,color:"#FAF7F0"}}>{pt.name}</div>
+                  <div style={{fontSize:11,color:"rgba(250,247,240,0.6)",marginTop:2}}>{fmtPricing(pt)} · {mods.filter(m=>m.product_type_id===pt.id).length} models</div>
+                </div>
+                <button style={btnSm} onClick={()=>setEditingPT({pid:selProj.id,isNew:false,pt:{...pt}})}>Edit</button>
+                <button style={{...btnSm,marginLeft:4,opacity:0.5}} onClick={()=>setMod(m=>({...m,confirm:{text:`Delete "${pt.name}" type? Models linked to it will be unlinked.`,fn:()=>{delProductType(selProj.id,pt.id);if(modelFilterType===pt.id)setModelFilterType(null);}}}))}>×</button>
+              </div>;
+            })}
+            {/* new type form */}
+            {editingPT&&editingPT.isNew&&(()=>{
+              const ep=editingPT.pt;
+              return <div style={{background:"rgba(0,0,0,0.2)",borderRadius:10,padding:11,marginBottom:8}}>
+                <input style={{...inpSt,marginBottom:7}} placeholder="Type name (e.g. Standard Socks)" value={ep.name} onChange={e=>setEditingPT(v=>({...v,pt:{...v.pt,name:e.target.value}}))}/>
+                <div style={{display:"flex",gap:6,marginBottom:7}}>
+                  <div style={{flex:1,background:ep.pricing==="bundle"?"#FAF7F0":"transparent",border:"1px solid #FAF7F0",borderRadius:7,padding:"7px",textAlign:"center",cursor:"pointer",color:ep.pricing==="bundle"?"#8B1A0F":"#FAF7F0",fontSize:12,fontWeight:ep.pricing==="bundle"?700:400}} onClick={()=>setEditingPT(v=>({...v,pt:{...v.pt,pricing:"bundle"}}))}>Bundle</div>
+                  <div style={{flex:1,background:ep.pricing==="fixed"?"#FAF7F0":"transparent",border:"1px solid #FAF7F0",borderRadius:7,padding:"7px",textAlign:"center",cursor:"pointer",color:ep.pricing==="fixed"?"#8B1A0F":"#FAF7F0",fontSize:12,fontWeight:ep.pricing==="fixed"?700:400}} onClick={()=>setEditingPT(v=>({...v,pt:{...v.pt,pricing:"fixed"}}))}>Fixed</div>
+                </div>
+                {ep.pricing==="fixed"?<input type="number" style={{...inpSt,marginBottom:7}} placeholder="Price per unit (£)" value={ep.unitPrice} onChange={e=>setEditingPT(v=>({...v,pt:{...v.pt,unitPrice:e.target.value}}))}/>
+                  :<div style={{display:"flex",gap:6,marginBottom:7}}>
+                    {["1","2","3"].map(k=><input key={k} type="number" style={{...inpSt}} placeholder={k==="1"?"1 pair £":k==="2"?"2 pairs £":"3 pairs £"} value={(ep.bundleTiers||{})[k]||""} onChange={e=>setEditingPT(v=>({...v,pt:{...v.pt,bundleTiers:{...(v.pt.bundleTiers||{}), [k]:e.target.value}}}))}/>)}
+                  </div>}
+                <input style={{...inpSt,marginBottom:8}} placeholder="Unit label (pair, item…)" value={ep.unit||""} onChange={e=>setEditingPT(v=>({...v,pt:{...v.pt,unit:e.target.value}}))}/>
+                <div style={{display:"flex",gap:6}}>
+                  <button style={{flex:1,background:"transparent",border:"1px solid #FAF7F0",color:"#FAF7F0",borderRadius:8,padding:"8px",fontSize:12,cursor:"pointer"}} onClick={()=>setEditingPT(null)}>Cancel</button>
+                  <button style={{flex:1,background:"#FAF7F0",color:"#8B1A0F",border:"none",borderRadius:8,padding:"8px",fontSize:12,fontWeight:700,cursor:"pointer"}} onClick={()=>{if(!ep.name) return;addProductType(selProj.id,{name:ep.name,pricing:ep.pricing,unitPrice:Number(ep.unitPrice||0),bundleTiers:ep.pricing==="bundle"?ep.bundleTiers:null,unit:ep.unit||"pair"});setEditingPT(null);}}>Add Type</button>
+                </div>
+              </div>;
+            })()}
+
+            {/* ── MODELS ── */}
+            <input ref={el=>importModelsRef.current=el} type="file" accept=".csv" style={{display:"none"}} onChange={e=>{const f=e.target.files[0];if(f){importModelsCSV(f,selProj.id);e.target.value='';}}}/>
+            <div style={{display:"flex",alignItems:"center",gap:6,marginTop:18,marginBottom:8}}>
+              <span style={{color:"#FAF7F0",fontSize:13,fontWeight:600,opacity:0.7,textTransform:"uppercase",letterSpacing:1,flex:1}}>Models</span>
+              <button style={btnSm} onClick={downloadModelsTemplate}>↓ Template</button>
+              <button style={btnSm} onClick={()=>importModelsRef.current&&importModelsRef.current.click()}>↑ Import</button>
+              <button style={{...btnSm,fontSize:12,padding:"4px 10px"}} onClick={()=>setEditingModel({pid:selProj.id,isNew:true,m:{name:"",cost:0,product_type_id:pts.length===1?pts[0].id:"",active:true}})}>+ Add Model</button>
+            </div>
+            {pts.length>0&&<div style={{display:"flex",gap:5,flexWrap:"wrap",marginBottom:9}}>
+              <div style={{fontSize:11,padding:"3px 9px",borderRadius:20,cursor:"pointer",border:"1px solid rgba(250,247,240,0.4)",background:!modelFilterType?"#FAF7F0":"transparent",color:!modelFilterType?"#8B1A0F":"#FAF7F0"}} onClick={()=>setModelFilterType(null)}>All</div>
+              {pts.map(pt=><div key={pt.id} style={{fontSize:11,padding:"3px 9px",borderRadius:20,cursor:"pointer",border:"1px solid rgba(250,247,240,0.4)",background:modelFilterType===pt.id?"#FAF7F0":"transparent",color:modelFilterType===pt.id?"#8B1A0F":"#FAF7F0"}} onClick={()=>setModelFilterType(t=>t===pt.id?null:pt.id)}>{pt.name}</div>)}
+            </div>}
+            {visModels.length===0&&!editingModel&&<div style={{color:"rgba(250,247,240,0.5)",fontSize:13,textAlign:"center",padding:"10px 0 6px"}}>No models yet</div>}
+            {visModels.map(m=>{
+              const isEditing=editingModel&&!editingModel.isNew&&editingModel.m.id===m.id;
+              const ptName=(pts.find(p=>p.id===m.product_type_id)||{}).name||"";
+              if(isEditing){
+                const em=editingModel.m;
+                return <div key={m.id} style={{background:"rgba(0,0,0,0.2)",borderRadius:10,padding:11,marginBottom:7}}>
+                  <input style={{...inpSt,marginBottom:7}} placeholder="Model name (e.g. donut worry)" value={em.name} onChange={e=>setEditingModel(v=>({...v,m:{...v.m,name:e.target.value}}))}/>
+                  <input type="number" style={{...inpSt,marginBottom:7}} placeholder="Cost (£)" value={em.cost} onChange={e=>setEditingModel(v=>({...v,m:{...v.m,cost:e.target.value}}))}/>
+                  <select style={{...inpSt,marginBottom:8}} value={em.product_type_id||""} onChange={e=>setEditingModel(v=>({...v,m:{...v.m,product_type_id:e.target.value}}))}><option value="">No type</option>{pts.map(pt=><option key={pt.id} value={pt.id}>{pt.name}</option>)}</select>
+                  <div style={{display:"flex",gap:6}}>
+                    <button style={{flex:1,background:"transparent",border:"1px solid #FAF7F0",color:"#FAF7F0",borderRadius:8,padding:"8px",fontSize:12,cursor:"pointer"}} onClick={()=>setEditingModel(null)}>Cancel</button>
+                    <button style={{flex:1,background:"#FAF7F0",color:"#8B1A0F",border:"none",borderRadius:8,padding:"8px",fontSize:12,fontWeight:700,cursor:"pointer"}} onClick={()=>{if(!em.name) return;updateModel(selProj.id,em.id,{name:em.name,cost:Number(em.cost||0),product_type_id:em.product_type_id||null,active:em.active!==false});setEditingModel(null);}}>Save</button>
+                  </div>
+                </div>;
+              }
+              return <div key={m.id} style={{...S.entryRow,marginBottom:5}}>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:13,fontWeight:500,color:"#FAF7F0"}}>{m.name}</div>
+                  {ptName&&<div style={{fontSize:11,color:"rgba(250,247,240,0.55)",marginTop:1}}>{ptName}{m.cost>0?` · £${Number(m.cost).toFixed(2)} cost`:""}</div>}
+                </div>
+                {!m.active&&<span style={{fontSize:10,color:"rgba(250,247,240,0.4)",marginRight:6}}>inactive</span>}
+                <button style={btnSm} onClick={()=>setEditingModel({pid:selProj.id,isNew:false,m:{...m}})}>Edit</button>
+                <button style={{...btnSm,marginLeft:4,opacity:0.5}} onClick={()=>setMod(m2=>({...m2,confirm:{text:`Delete model "${m.name}"?`,fn:()=>delModel(selProj.id,m.id)}}))}>×</button>
+              </div>;
+            })}
+            {/* new model form */}
+            {editingModel&&editingModel.isNew&&(()=>{
+              const em=editingModel.m;
+              return <div style={{background:"rgba(0,0,0,0.2)",borderRadius:10,padding:11,marginBottom:7}}>
+                <input style={{...inpSt,marginBottom:7}} placeholder="Model name (e.g. fuck off)" value={em.name} onChange={e=>setEditingModel(v=>({...v,m:{...v.m,name:e.target.value}}))}/>
+                <input type="number" style={{...inpSt,marginBottom:7}} placeholder="Cost per unit (£)" value={em.cost||""} onChange={e=>setEditingModel(v=>({...v,m:{...v.m,cost:e.target.value}}))}/>
+                <select style={{...inpSt,marginBottom:8}} value={em.product_type_id||""} onChange={e=>setEditingModel(v=>({...v,m:{...v.m,product_type_id:e.target.value}}))}><option value="">No type</option>{pts.map(pt=><option key={pt.id} value={pt.id}>{pt.name}</option>)}</select>
+                <div style={{display:"flex",gap:6}}>
+                  <button style={{flex:1,background:"transparent",border:"1px solid #FAF7F0",color:"#FAF7F0",borderRadius:8,padding:"8px",fontSize:12,cursor:"pointer"}} onClick={()=>setEditingModel(null)}>Cancel</button>
+                  <button style={{flex:1,background:"#FAF7F0",color:"#8B1A0F",border:"none",borderRadius:8,padding:"8px",fontSize:12,fontWeight:700,cursor:"pointer"}} onClick={()=>{if(!em.name) return;addModel(selProj.id,{name:em.name,cost:Number(em.cost||0),product_type_id:em.product_type_id||null,active:true});setEditingModel(null);}}>Add Model</button>
+                </div>
+              </div>;
+            })()}
+          </>;
+        })()}
         {projTab==="insights"&&<GoalInsights goal={{entries:allE,target:(selProj.goals||[]).reduce((s,g)=>s+g.target,0),period:"monthly",createdStr:today()}} color="#FAF7F0" showProj={true} projData={selProj}/>}
         <div style={{display:"flex",gap:7,marginTop:22}}>
           <button style={{...S.btnGhost,color:"#FAF7F0",borderColor:"#C0392B"}} onClick={()=>setMod(m=>({...m,confirm:{text:`Delete "${selProj.name}" and all its data?`,fn:()=>delProj(selProj.id)}}))}>Delete Project</button>
