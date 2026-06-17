@@ -1004,25 +1004,44 @@ function EditEntryModal({entry, onSave, onClose, availGoals=[], currentGoalId=nu
     if(!parsedCart) return {};
     const map={};
     parsedCart.forEach(ci=>{
-      (ci.models||[]).forEach((m,mi)=>{
-        if(m&&m.id) map[ci.typeId+'_'+mi]=m.id;
-      });
+      (ci.models||[]).forEach((m,mi)=>{ if(m&&m.id) map[ci.typeId+'_'+mi]=m.id; });
     });
     return map;
   },[parsedCart]);
   const [editModels, setEditModels] = useState(initModels);
+  // For entries WITHOUT cart_items: manual type + model assignment
+  const [manualTypeId, setManualTypeId] = useState("");
+  const [manualModels, setManualModels] = useState({});
 
   function buildCartItems(){
-    if(!parsedCart) return null;
-    return parsedCart.map(ci=>({
-      ...ci,
-      models:(ci.models||[]).map((_,mi)=>{
-        const mid=editModels[ci.typeId+'_'+mi];
-        const m=allModels.find(x=>x.id===mid);
-        return m?{id:m.id,name:m.name}:null;
-      })
-    }));
+    if(parsedCart){
+      return parsedCart.map(ci=>({
+        ...ci,
+        models:(ci.models||[]).map((_,mi)=>{
+          const mid=editModels[ci.typeId+'_'+mi];
+          const m=allModels.find(x=>x.id===mid);
+          return m?{id:m.id,name:m.name}:null;
+        })
+      }));
+    }
+    if(manualTypeId){
+      const pt=allProductTypes.find(p=>p.id===manualTypeId);
+      if(!pt) return null;
+      const units=Math.max(1,parseInt(e.units)||1);
+      return [{
+        typeId:pt.id, typeName:pt.name, qty:units,
+        lineTotal:parseFloat(e.amount)||0,
+        models:Array.from({length:units}).map((_,mi)=>{
+          const mid=manualModels[mi];
+          const m=allModels.find(x=>x.id===mid);
+          return m?{id:m.id,name:m.name}:null;
+        })
+      }];
+    }
+    return null;
   }
+
+  const selSt={width:"100%",background:"#8B1A0F",border:"1px solid rgba(250,247,240,0.5)",borderRadius:8,padding:"9px 11px",color:"#FAF7F0",fontSize:13,outline:"none",boxSizing:"border-box",fontFamily:"inherit"};
 
   return <div style={S.overlay}><div style={{...S.modal,maxHeight:"90vh",overflowY:"auto"}}>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
@@ -1034,10 +1053,12 @@ function EditEntryModal({entry, onSave, onClose, availGoals=[], currentGoalId=nu
     <div style={S.field}><label style={S.label}>Source</label><div style={S.chipRow}>{SOURCES.map(s=><Chip key={s} active={e.source===s} onClick={()=>setE(v=>({...v,source:s}))}>{(SRC[s]&&SRC[s].emoji)||"✦"} {s}</Chip>)}</div></div>
     <div style={S.field}><label style={S.label}>Units Sold</label><input style={S.input} type="number" placeholder="0" value={e.units||""} onChange={x=>setE(v=>({...v,units:x.target.value}))}/></div>
     <div style={S.field}><label style={S.label}>Note</label><input style={S.input} value={e.note||""} onChange={x=>setE(v=>({...v,note:x.target.value}))}/></div>
+
+    {/* Models section — for entries WITH cart_items */}
     {parsedCart&&parsedCart.length>0&&<div style={{marginBottom:14}}>
       <label style={{display:"block",fontSize:11,letterSpacing:1.5,color:"#FAF7F0",textTransform:"uppercase",marginBottom:8,fontWeight:600}}>Models / Modeller</label>
       {parsedCart.map(ci=>{
-        const typeModels=allModels.filter(m=>m.product_type_id===ci.typeId&&m.active!==false);
+        const typeModels=allModels.filter(m=>m.product_type_id===ci.typeId&&m.active!==false).sort((a,b)=>a.name.localeCompare(b.name));
         return <div key={ci.typeId} style={{marginBottom:10,background:"#721408",borderRadius:8,padding:"9px 11px"}}>
           <div style={{fontSize:12,fontWeight:700,color:"#FAF7F0",marginBottom:6}}>{ci.typeName} × {ci.qty}</div>
           {Array.from({length:ci.qty}).map((_,mi)=>{
@@ -1047,8 +1068,7 @@ function EditEntryModal({entry, onSave, onClose, availGoals=[], currentGoalId=nu
               <div style={{fontSize:10,color:"#FAD5C8",marginBottom:3}}>Pair {mi+1}</div>
               <div style={{display:"flex",gap:5,alignItems:"center"}}>
                 <select style={{flex:1,background:"#5A1A0A",border:"1px solid rgba(250,247,240,0.35)",borderRadius:7,padding:"5px 8px",color:selMid?"#FAF7F0":"#FAD5C8",fontSize:12,outline:"none",fontFamily:"inherit"}}
-                  value={selMid}
-                  onChange={ev=>setEditModels(v=>({...v,[lineKey]:ev.target.value}))}>
+                  value={selMid} onChange={ev=>setEditModels(v=>({...v,[lineKey]:ev.target.value}))}>
                   <option value="">— select / seçiniz —</option>
                   {typeModels.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}
                 </select>
@@ -1059,6 +1079,37 @@ function EditEntryModal({entry, onSave, onClose, availGoals=[], currentGoalId=nu
         </div>;
       })}
     </div>}
+
+    {/* Models section — for OLD entries WITHOUT cart_items */}
+    {!parsedCart&&allProductTypes.length>0&&<div style={{marginBottom:14}}>
+      <label style={{display:"block",fontSize:11,letterSpacing:1.5,color:"#FAF7F0",textTransform:"uppercase",marginBottom:8,fontWeight:600}}>Models / Modeller</label>
+      <div style={{marginBottom:8}}>
+        <div style={{fontSize:10,color:"#FAD5C8",marginBottom:4}}>Ürün tipi / Product type</div>
+        <select style={selSt} value={manualTypeId} onChange={ev=>{setManualTypeId(ev.target.value);setManualModels({});}}>
+          <option value="">— select / seçiniz —</option>
+          {allProductTypes.map(pt=><option key={pt.id} value={pt.id}>{pt.name}</option>)}
+        </select>
+      </div>
+      {manualTypeId&&(()=>{
+        const units=Math.max(1,parseInt(e.units)||1);
+        const tModels=allModels.filter(m=>m.product_type_id===manualTypeId&&m.active!==false).sort((a,b)=>a.name.localeCompare(b.name));
+        return Array.from({length:units}).map((_,mi)=>{
+          const selMid=manualModels[mi]||"";
+          return <div key={mi} style={{marginBottom:6}}>
+            <div style={{fontSize:10,color:"#FAD5C8",marginBottom:3}}>Pair {mi+1}</div>
+            <div style={{display:"flex",gap:5,alignItems:"center"}}>
+              <select style={{...selSt,padding:"6px 9px",fontSize:12,background:"#5A1A0A"}}
+                value={selMid} onChange={ev=>setManualModels(v=>({...v,[mi]:ev.target.value}))}>
+                <option value="">— select / seçiniz —</option>
+                {tModels.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}
+              </select>
+              {selMid&&<span style={{background:"rgba(250,247,240,0.12)",border:"1px solid rgba(250,247,240,0.3)",borderRadius:6,padding:"4px 8px",fontSize:13,color:"#FAD5C8",cursor:"pointer"}} onClick={()=>setManualModels(v=>{const n={...v};delete n[mi];return n;})}>×</span>}
+            </div>
+          </div>;
+        });
+      })()}
+    </div>}
+
     {availGoals&&availGoals.length>1&&<div style={{marginBottom:14}}>
       <label style={{display:"block",fontSize:11,letterSpacing:1.5,color:"#FAF7F0",textTransform:"uppercase",marginBottom:7,fontWeight:600}}>Move to Goal</label>
       <div style={{display:"flex",flexDirection:"column",gap:5,maxHeight:140,overflowY:"auto"}}>
@@ -1072,7 +1123,7 @@ function EditEntryModal({entry, onSave, onClose, availGoals=[], currentGoalId=nu
     </div>}
     <div style={{display:"flex",gap:8}}>
       <button style={S.btnGhost} onClick={onClose}>Cancel</button>
-      <button style={S.btn} onClick={()=>{const ci=buildCartItems();onSave({...e,amount:parseFloat(e.amount),units:e.units?parseFloat(e.units):0,cart_items:ci?JSON.stringify(ci):e.cart_items});}}>Save</button>
+      <button style={S.btn} onClick={()=>{const ci=buildCartItems();onSave({...e,amount:parseFloat(e.amount),units:e.units?parseFloat(e.units):0,cart_items:ci?JSON.stringify(ci):(e.cart_items||null)});}}>Save</button>
     </div>
   </div></div>;
 }
@@ -2217,7 +2268,7 @@ function expCost(exp) {
                 <div style={{fontSize:10,letterSpacing:2,color:"#FAD5C8",textTransform:"uppercase",marginBottom:8}}>Cart</div>
                 {cart.map(item=>{
                   const linePrice=calcTypePrice({pricing:item.pricing,unitPrice:item.unitPrice,bundleTiers:item.bundleTiers},item.qty);
-                  const typeModels=allModels.filter(m=>m.product_type_id===item.typeId&&m.active!==false);
+                  const typeModels=allModels.filter(m=>m.product_type_id===item.typeId&&m.active!==false).sort((a,b)=>a.name.localeCompare(b.name));
                   return (
                     <React.Fragment key={item.typeId}>
                     <div style={{display:"flex",alignItems:"center",background:"#721408",borderRadius:8,padding:"10px 12px",marginBottom:5}}>
@@ -2530,6 +2581,39 @@ function expCost(exp) {
               <button style={{background:"none",border:"none",color:"#FAF7F0",fontSize:17,cursor:"pointer",padding:"0 2px"}} onClick={onDel}>×</button>
             </div>
           );
+          // ── COGS: collect model costs from sales entries ──
+          function collectGoalEntries(goals){
+            const r=[];
+            (goals||[]).forEach(g=>{
+              (g.entries||[]).forEach(en=>{if(en.cart_items)r.push(en);});
+              collectGoalEntries(g.subGoals||[]).forEach(x=>r.push(x));
+            });
+            return r;
+          }
+          const salesEntries=collectGoalEntries(selProj.goals||[]);
+          const allMods=selProj.models||[];
+          const cogsMap={};
+          salesEntries.forEach(en=>{
+            let cart;
+            try{cart=typeof en.cart_items==="string"?JSON.parse(en.cart_items):en.cart_items;}catch(_){return;}
+            if(!cart) return;
+            cart.forEach(ci=>{
+              let cost=0;
+              (ci.models||[]).forEach(m=>{
+                if(!m) return;
+                const fm=allMods.find(x=>x.id===m.id);
+                cost+=fm?Number(fm.cost||0):0;
+              });
+              if(cost===0) return;
+              const key=en.date+'___'+ci.typeName;
+              if(!cogsMap[key]) cogsMap[key]={date:en.date,typeName:ci.typeName,qty:0,totalCost:0};
+              cogsMap[key].qty+=ci.qty;
+              cogsMap[key].totalCost+=cost;
+            });
+          });
+          const cogsRows=Object.values(cogsMap).sort((a,b)=>a.date.localeCompare(b.date)||a.typeName.localeCompare(b.typeName));
+          const cogsTotal=cogsRows.reduce((s,r)=>s+r.totalCost,0);
+
           return <>
             <button style={{...S.btn,marginBottom:11}} onClick={()=>{setXForm(EX());setView("newExpense");}}>+ Add Expense</button>
             {allExps.length===0&&<div style={{color:"#FAF7F0",fontSize:14,textAlign:"center",padding:"20px 0"}}>No expenses yet</div>}
@@ -2538,9 +2622,33 @@ function expCost(exp) {
               ()=>delExp(selProj.id,x.id,x._goalId||null)
             ))}
             {allExps.length>0&&<div style={{marginTop:9,padding:"9px 11px",background:"#B02A1E",borderRadius:8,display:"flex",justifyContent:"space-between"}}>
-              <span style={{fontSize:13,fontWeight:500,color:"#FAF7F0"}}>Total</span>
+              <span style={{fontSize:13,fontWeight:500,color:"#FAF7F0"}}>Total Expenses</span>
               <span style={{fontSize:15,fontWeight:700,color:"#E07840"}}>{fmtGBP(grandTotal)}</span>
             </div>}
+
+            {cogsRows.length>0&&<>
+              <div style={{fontSize:10,letterSpacing:2,color:"#FAD5C8",textTransform:"uppercase",marginTop:18,marginBottom:8}}>Cost of Goods Sold</div>
+              {cogsRows.map(r=>(
+                <div key={r.date+'_'+r.typeName} style={{...S.entryRow,background:"rgba(90,26,10,0.5)"}}>
+                  <div style={{minWidth:56,flexShrink:0}}>
+                    <div style={{fontSize:13,fontWeight:500,color:"#FAF7F0"}}>{fs(r.date)}</div>
+                  </div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:13,fontWeight:500,color:"#FAF7F0"}}>{r.typeName}</div>
+                    <div style={{fontSize:10,color:"rgba(250,247,240,0.5)",marginTop:1}}>{r.qty} pair{r.qty!==1?"s":""} · COGS</div>
+                  </div>
+                  <div style={{fontSize:15,fontWeight:700,color:"#E07840",flexShrink:0}}>{fmtGBP(r.totalCost)}</div>
+                </div>
+              ))}
+              <div style={{marginTop:9,padding:"9px 11px",background:"#5A1A0A",borderRadius:8,display:"flex",justifyContent:"space-between"}}>
+                <span style={{fontSize:13,fontWeight:500,color:"#FAF7F0"}}>Total COGS</span>
+                <span style={{fontSize:15,fontWeight:700,color:"#E07840"}}>{fmtGBP(cogsTotal)}</span>
+              </div>
+              <div style={{marginTop:6,padding:"9px 11px",background:"#B02A1E",borderRadius:8,display:"flex",justifyContent:"space-between"}}>
+                <span style={{fontSize:13,fontWeight:600,color:"#FAF7F0"}}>Grand Total</span>
+                <span style={{fontSize:15,fontWeight:700,color:"#E07840"}}>{fmtGBP(grandTotal+cogsTotal)}</span>
+              </div>
+            </>}
           </>;
         })()}
         {projTab==="products"&&(()=>{
