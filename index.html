@@ -1033,14 +1033,17 @@ function EditEntryModal({entry, onSave, onClose, availGoals=[], currentGoalId=nu
       if(!pt) return null;
       const units=Math.max(1,parseInt(e.units)||1);
       const defCost=Number(pt.defaultModelCost||pt.default_model_cost||0);
+      // if defCost still 0, try average of the type's live models
+      const typeModels=allModels.filter(m=>m.product_type_id===manualTypeId&&Number(m.cost||0)>0);
+      const avgCost=typeModels.length>0?typeModels.reduce((s,m)=>s+Number(m.cost||0),0)/typeModels.length:0;
+      const fallbackCost=defCost>0?defCost:avgCost;
       return [{
         typeId:pt.id, typeName:pt.name, qty:units,
         lineTotal:parseFloat(e.amount)||0,
         models:Array.from({length:units}).map((_,mi)=>{
           const mid=manualModels[mi];
           const m=mid?allModels.find(x=>x.id===mid):null;
-          // if no model selected, store a placeholder with the type's default cost
-          return m?{modelId:m.id,name:m.name,cost:Number(m.cost||defCost)}:{modelId:null,name:"—",cost:defCost};
+          return m?{modelId:m.id,name:m.name,cost:Number(m.cost||0)>0?Number(m.cost):fallbackCost}:{modelId:null,name:"—",cost:fallbackCost};
         })
       }];
     }
@@ -1549,16 +1552,30 @@ function calcCOGS(entries, liveModels, liveProductTypes){
     try{cart=typeof en.cart_items==="string"?JSON.parse(en.cart_items):en.cart_items;}catch(_){return;}
     if(!Array.isArray(cart)||!cart.length) return;
     cart.forEach(ci=>{
-      // get defaultModelCost for this type as fallback
       const pt=(liveProductTypes||[]).find(p=>p.id===ci.typeId);
       const defCost=pt?Number(pt.defaultModelCost||pt.default_model_cost||0):0;
+      // If no models stored at all, use defCost × qty directly
+      if(!ci.models||ci.models.length===0){
+        if(defCost===0) return;
+        const key=en.date+'___'+ci.typeName;
+        if(!map[key]) map[key]={date:en.date,typeName:ci.typeName,qty:0,totalCost:0};
+        map[key].qty+=ci.qty;
+        map[key].totalCost+=defCost*ci.qty;
+        return;
+      }
       let cost=0;
-      (ci.models||[]).forEach(m=>{
-        if(!m){cost+=defCost;return;} // unassigned pair → use type default
-        if(Number(m.cost||0)>0){cost+=Number(m.cost);return;}
+      ci.models.forEach(m=>{
+        if(!m){cost+=defCost;return;} // null slot → type default
+        // 1. stored cost
+        const stored=Number(m.cost||0);
+        if(stored>0){cost+=stored;return;}
+        // 2. live model lookup
         const mid=m.modelId||m.id;
         const fm=mid?(liveModels||[]).find(x=>x.id===mid):null;
-        cost+=fm?Number(fm.cost||0):defCost; // live lookup or fallback
+        const liveCost=fm?Number(fm.cost||0):0;
+        if(liveCost>0){cost+=liveCost;return;}
+        // 3. type defaultModelCost fallback
+        cost+=defCost;
       });
       if(cost===0) return;
       const key=en.date+'___'+ci.typeName;
