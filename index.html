@@ -1638,7 +1638,15 @@ function expCost(exp) {
   }
   function delProj(pid){setDb(d=>({...d,projects:d.projects.filter(p=>p.id!==pid)}));setMod(m=>({...m,confirm:null}));setView("dashboard");toast_("Project deleted");}
   function saveEditProj(pid,name,isGeneral,gid_,icon){if(!name||!name.trim())return;if(isGeneral&&gid_){updGoal(gid_,g=>({...g,name:name.trim(),icon:(icon||g.icon)}),pid);}else{setDb(d=>({...d,projects:d.projects.map(p=>p.id===pid?{...p,name:name.trim()}:p)}));}setEditingProj(null);toast_("Updated ✦");}
-  function delExp(pid,eid){setDb(d=>({...d,projects:d.projects.map(p=>p.id===pid?{...p,expenses:(p.expenses||[]).filter(e=>e.id!==eid)}:p)}));db_.delete('expenses',eid).catch(console.error);toast_("Deleted");}
+  function delExp(pid,eid,gid_=null){
+    if(gid_){
+      updGoal(gid_,g=>({...g,expenses:(g.expenses||[]).filter(e=>e.id!==eid)}),pid);
+    } else {
+      setDb(d=>({...d,projects:d.projects.map(p=>p.id===pid?{...p,expenses:(p.expenses||[]).filter(e=>e.id!==eid)}:p)}));
+    }
+    db_.delete('expenses',eid).catch(console.error);
+    toast_("Deleted");
+  }
 
   function moveEntry(entry, fromGoalId, toGoalId, pid) {
     // Remove from source goal
@@ -2401,17 +2409,52 @@ function expCost(exp) {
             }
           </>;
         })()}
-        {projTab==="expenses"&&<>
-          <button style={{...S.btn,marginBottom:11}} onClick={()=>{setXForm(EX());setView("newExpense");}}>+ Add Expense</button>
-          {(selProj.expenses||[]).length===0&&<div style={{color:"#FAF7F0",fontSize:14,textAlign:"center",padding:"20px 0"}}>No expenses yet</div>}
-          {(selProj.expenses||[]).map(x=><div key={x.id} style={S.entryRow}>
-            <div style={{minWidth:56,flexShrink:0}}><div style={{fontSize:13,fontWeight:500,color:"#FAF7F0"}}>{x.freq==="one-off"?fs(x.startDate):x.freq}</div><div style={{fontSize:11,marginTop:1,color:"#E07840"}}>{x.category}</div></div>
-            <div style={{flex:1,fontSize:13,fontWeight:500,color:"#FAF7F0",minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{x.name}{x.note?" · "+x.note:""}</div>
-            <div style={{fontSize:15,fontWeight:700,color:"#E07840",flexShrink:0}}>{fmtGBP(expCost(x))}</div>
-            <button style={{background:"rgba(250,247,240,0.2)",border:"1px solid #FAF7F0",color:"#FAF7F0",borderRadius:5,fontSize:11,cursor:"pointer",padding:"3px 8px",marginRight:6}} onClick={()=>setEditingExp({pid:selProj.id,gid_:x.goal_id||x.goalId||null,exp:{...x,startDate:x.startDate||x.start_date||""}})}>Edit</button><button style={{background:"none",border:"none",color:"#FAF7F0",fontSize:17,cursor:"pointer",padding:"0 2px"}} onClick={()=>delExp(selProj.id,x.id)}>×</button>
-          </div>)}
-          {(selProj.expenses||[]).length>0&&<div style={{marginTop:9,padding:"9px 11px",background:"#B02A1E",borderRadius:8,display:"flex",justifyContent:"space-between"}}><span style={{fontSize:13,fontWeight:500,color:"#FAF7F0"}}>Total</span><span style={{fontSize:15,fontWeight:700,color:"#E07840"}}>{fmtGBP(ec)}</span></div>}
-        </>}
+        {projTab==="expenses"&&(()=>{
+          // Collect all goal expenses recursively with goal label
+          function collectGoalExps(goals, prefix="") {
+            const result=[];
+            (goals||[]).filter(g=>!g._general&&!g.archived).forEach(g=>{
+              const label=prefix?prefix+" › "+g.name:g.name;
+              (g.expenses||[]).forEach(x=>result.push({...x,_goalId:g.id,_goalLabel:label}));
+              collectGoalExps(g.subGoals||[], label).forEach(r=>result.push(r));
+            });
+            return result;
+          }
+          const projExps=selProj.expenses||[];
+          const goalExps=collectGoalExps(selProj.goals||[]);
+          const allExps=[
+            ...projExps.map(x=>({...x,_goalId:null,_goalLabel:"Project level"})),
+            ...goalExps
+          ];
+          const grandTotal=allExps.reduce((s,x)=>s+expCost(x),0);
+          const expRow=(x,onEdit,onDel)=>(
+            <div key={x.id} style={S.entryRow}>
+              <div style={{minWidth:56,flexShrink:0}}>
+                <div style={{fontSize:13,fontWeight:500,color:"#FAF7F0"}}>{x.freq==="one-off"?fs(x.startDate||x.start_date):x.freq}</div>
+                <div style={{fontSize:11,marginTop:1,color:"#E07840"}}>{x.category}</div>
+              </div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13,fontWeight:500,color:"#FAF7F0",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{x.name}{x.note?" · "+x.note:""}</div>
+                <div style={{fontSize:10,color:"rgba(250,247,240,0.5)",marginTop:1}}>{x._goalLabel}</div>
+              </div>
+              <div style={{fontSize:15,fontWeight:700,color:"#E07840",flexShrink:0,marginRight:4}}>{fmtGBP(expCost(x))}</div>
+              <button style={{background:"rgba(250,247,240,0.2)",border:"1px solid #FAF7F0",color:"#FAF7F0",borderRadius:5,fontSize:11,cursor:"pointer",padding:"3px 8px",marginRight:4}} onClick={onEdit}>Edit</button>
+              <button style={{background:"none",border:"none",color:"#FAF7F0",fontSize:17,cursor:"pointer",padding:"0 2px"}} onClick={onDel}>×</button>
+            </div>
+          );
+          return <>
+            <button style={{...S.btn,marginBottom:11}} onClick={()=>{setXForm(EX());setView("newExpense");}}>+ Add Expense</button>
+            {allExps.length===0&&<div style={{color:"#FAF7F0",fontSize:14,textAlign:"center",padding:"20px 0"}}>No expenses yet</div>}
+            {allExps.map(x=>expRow(x,
+              ()=>setEditingExp({pid:selProj.id,gid_:x._goalId||null,exp:{...x,startDate:x.startDate||x.start_date||""}}),
+              ()=>delExp(selProj.id,x.id,x._goalId||null)
+            ))}
+            {allExps.length>0&&<div style={{marginTop:9,padding:"9px 11px",background:"#B02A1E",borderRadius:8,display:"flex",justifyContent:"space-between"}}>
+              <span style={{fontSize:13,fontWeight:500,color:"#FAF7F0"}}>Total</span>
+              <span style={{fontSize:15,fontWeight:700,color:"#E07840"}}>{fmtGBP(grandTotal)}</span>
+            </div>}
+          </>;
+        })()}
         {projTab==="products"&&(()=>{
           const pts=selProj.productTypes||[];
           const mods=selProj.models||[];
