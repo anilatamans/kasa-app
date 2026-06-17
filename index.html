@@ -1246,10 +1246,12 @@ function App() {
   });
   const [syncStatus, setSyncStatus] = useState('idle'); // idle | syncing | error
   const navRestoredRef = React.useRef(false);
+  const isPopStateRef = React.useRef(false);
 
-  // Push navigation to browser history so back button works
+  // Push navigation to browser history so back/forward buttons work
   useEffect(()=>{
     if(!session) return;
+    if(isPopStateRef.current){isPopStateRef.current=false;return;} // don't re-push on popstate
     const state={view,sel};
     window.history.pushState(state,'');
     try{ sessionStorage.setItem('kasa_nav',JSON.stringify(state)); }catch{}
@@ -1258,7 +1260,11 @@ function App() {
   // Browser back/forward button handler
   useEffect(()=>{
     const handler=(e)=>{
-      if(e.state&&e.state.view){setView(e.state.view);setSel(e.state.sel||{pid:null,gid_:null});}
+      if(e.state&&e.state.view){
+        isPopStateRef.current=true;
+        setView(e.state.view);
+        setSel(e.state.sel||{pid:null,gid_:null});
+      }
     };
     window.addEventListener('popstate',handler);
     return ()=>window.removeEventListener('popstate',handler);
@@ -1988,19 +1994,6 @@ function expCost(exp) {
             })}));
           }
           if(uid) db_.insert("entries",{id:entry.id,user_id:uid,goal_id:targetGoalId||null,project_id:pid,amount:finalTotal,source:posPayment,note:finalNoteStr||noteStr,date:posDate||today(),units:totalUnits}).catch(console.error);
-          // Auto-register new model names typed in POS as products
-          if(pid) {
-            const typedNames=[...new Set(Object.values(posModelLines).map(v=>(v||"").trim()).filter(Boolean))];
-            const existingNames=((selProj&&selProj.products)||[]).map(p=>p.name.toLowerCase());
-            const newNames=typedNames.filter(n=>!existingNames.includes(n.toLowerCase()));
-            if(newNames.length>0){
-              const newProds=newNames.map(name=>({id:gid(),name,unit_cost:0,unit:"pair",is_premium:false}));
-              setDb(d=>({...d,projects:d.projects.map(p=>p.id!==pid?p:{...p,products:[...(p.products||[]),...newProds]})}));
-              newProds.forEach(prod=>{
-                if(uid) db_.insert('products',{id:prod.id,user_id:uid,project_id:pid,name:prod.name,unit_cost:0,unit:'pair',is_premium:false}).catch(console.error);
-              });
-            }
-          }
           setPosMode(false); setCart([]); setPosModelLines({}); toast_(`Sale saved — ${fmtGBP(finalTotal)} ✦`);
         }
 
@@ -2333,7 +2326,9 @@ function expCost(exp) {
 
     {/* GOAL */}
     {view==="goal"&&selGoal&&(()=>{
-      const earned=sumGoalTotal(selGoal);
+      const grossInc=sumGoalTotal(selGoal);
+      const goalExp=goalExpTotal(selGoal);
+      const earned=grossInc-goalExp;
       const pct=Math.min(100,(earned/Math.max(selGoal.target,1))*100);
       const c=selCfg.color;
       const products=sel.pid?(db.projects.find(p=>p.id===sel.pid)||{}).products||[]:[];
@@ -2341,10 +2336,17 @@ function expCost(exp) {
         <div style={{...S.card,borderTopWidth:3,borderTopColor:c}}>
           <div style={{fontSize:24,marginBottom:5}}>{selGoal._general?(selGoal.icon||"📌"):selCfg.emoji}</div>
           <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:2}}><div style={{fontSize:19,fontWeight:700}}>{selGoal.name}</div>{selGoal._general&&<button style={{background:"rgba(250,247,240,0.15)",border:"1px solid #FAF7F0",color:"#FAF7F0",borderRadius:5,fontSize:11,cursor:"pointer",padding:"3px 8px"}} onClick={()=>setEditingProj({pid:sel.pid,name:selGoal.name,isGeneral:true,gid_:selGoal.id})}>Edit</button>}</div>
-          {!selGoal._general&&<div style={{fontSize:13,fontWeight:500,color:"#FAF7F0",marginBottom:11}}>{selCfg.label} · {periodLabel(selGoal)}</div>}
-          <div style={{fontSize:34,fontWeight:700,color:c,lineHeight:1}}>{fmtGBP(earned)}</div>
+          {!selGoal._general&&<div style={{fontSize:13,fontWeight:500,color:"#FAF7F0",marginBottom:8}}>{selCfg.label} · {periodLabel(selGoal)}</div>}
+          {goalExp>0
+            ?<div style={{display:"flex",gap:16,marginBottom:selGoal._general?0:6,flexWrap:"wrap"}}>
+              <div><div style={{fontSize:10,letterSpacing:1.5,color:"#FAD5C8",textTransform:"uppercase"}}>Income</div><div style={{fontSize:22,fontWeight:700,color:c}}>{fmtGBP(grossInc)}</div></div>
+              <div><div style={{fontSize:10,letterSpacing:1.5,color:"#FAD5C8",textTransform:"uppercase"}}>Expenses</div><div style={{fontSize:22,fontWeight:700,color:"#F87171"}}>−{fmtGBP(goalExp)}</div></div>
+              <div><div style={{fontSize:10,letterSpacing:1.5,color:"#FAD5C8",textTransform:"uppercase"}}>Net</div><div style={{fontSize:22,fontWeight:700,color:earned>=0?c:"#F87171"}}>{fmtGBP(earned)}</div></div>
+            </div>
+            :<div style={{fontSize:34,fontWeight:700,color:c,lineHeight:1,marginBottom:selGoal._general?0:6}}>{fmtGBP(earned)}</div>
+          }
           {!selGoal._general&&<>
-            <div style={{fontSize:13,fontWeight:500,color:"#FAF7F0",marginTop:3,marginBottom:9}}>of {fmtGBP(selGoal.target)}</div>
+            <div style={{fontSize:13,fontWeight:500,color:"#FAF7F0",marginBottom:9}}>of {fmtGBP(selGoal.target)}</div>
             <PBar pct={pct} color={c} h={4}/>
             <div style={{display:"flex",gap:9,fontSize:12,color:"#FAF7F0",marginTop:6,flexWrap:"wrap"}}>
               <span>{pct.toFixed(1)}%</span><span>{daysLeft(selGoal)}d left</span>{streak(selGoal.entries)>0&&<span>🔥 {streak(selGoal.entries)}d</span>}
