@@ -1032,13 +1032,15 @@ function EditEntryModal({entry, onSave, onClose, availGoals=[], currentGoalId=nu
       const pt=allProductTypes.find(p=>p.id===manualTypeId);
       if(!pt) return null;
       const units=Math.max(1,parseInt(e.units)||1);
+      const defCost=Number(pt.defaultModelCost||pt.default_model_cost||0);
       return [{
         typeId:pt.id, typeName:pt.name, qty:units,
         lineTotal:parseFloat(e.amount)||0,
         models:Array.from({length:units}).map((_,mi)=>{
           const mid=manualModels[mi];
-          const m=allModels.find(x=>x.id===mid);
-          return m?{id:m.id,name:m.name}:null;
+          const m=mid?allModels.find(x=>x.id===mid):null;
+          // if no model selected, store a placeholder with the type's default cost
+          return m?{modelId:m.id,name:m.name,cost:Number(m.cost||defCost)}:{modelId:null,name:"—",cost:defCost};
         })
       }];
     }
@@ -1539,21 +1541,24 @@ function collectEntriesWithCart(goals){
   });
   return r;
 }
-// Build COGS rows from entries + live models list
-function calcCOGS(entries, liveModels){
+// Build COGS rows from entries + live models + product types (for defaultModelCost fallback)
+function calcCOGS(entries, liveModels, liveProductTypes){
   const map={};
   (entries||[]).forEach(en=>{
     let cart;
     try{cart=typeof en.cart_items==="string"?JSON.parse(en.cart_items):en.cart_items;}catch(_){return;}
     if(!Array.isArray(cart)||!cart.length) return;
     cart.forEach(ci=>{
+      // get defaultModelCost for this type as fallback
+      const pt=(liveProductTypes||[]).find(p=>p.id===ci.typeId);
+      const defCost=pt?Number(pt.defaultModelCost||pt.default_model_cost||0):0;
       let cost=0;
       (ci.models||[]).forEach(m=>{
-        if(!m) return;
+        if(!m){cost+=defCost;return;} // unassigned pair → use type default
         if(Number(m.cost||0)>0){cost+=Number(m.cost);return;}
         const mid=m.modelId||m.id;
         const fm=mid?(liveModels||[]).find(x=>x.id===mid):null;
-        cost+=fm?Number(fm.cost||0):0;
+        cost+=fm?Number(fm.cost||0):defCost; // live lookup or fallback
       });
       if(cost===0) return;
       const key=en.date+'___'+ci.typeName;
@@ -2621,7 +2626,7 @@ function expCost(exp) {
           );
           // ── COGS: all entries with cart_items across all goals ──
           const projSalesEntries=collectEntriesWithCart(selProj.goals||[]);
-          const cogsRows=calcCOGS(projSalesEntries, selProj.models||[]);
+          const cogsRows=calcCOGS(projSalesEntries, selProj.models||[], selProj.productTypes||[]);
           const cogsTotal=cogsRows.reduce((s,r)=>s+r.totalCost,0);
 
           return <>
@@ -2833,7 +2838,7 @@ function expCost(exp) {
             ...(selGoal.entries||[]).filter(en=>en.cart_items),
             ...collectEntriesWithCart(selGoal.subGoals||[])
           ];
-          const goalCogsRows=calcCOGS(goalEntriesForCOGS, selProj?selProj.models||[]:[]);
+          const goalCogsRows=calcCOGS(goalEntriesForCOGS, selProj?selProj.models||[]:[], selProj?selProj.productTypes||[]:[]);
           const goalCogsTotal=goalCogsRows.reduce((s,r)=>s+r.totalCost,0);
           return <>
           <button style={{...S.btn,marginBottom:11}} onClick={()=>{setXForm(EX());setView("newGoalExpense");}}>+ Add Expense</button>
