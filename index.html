@@ -1255,6 +1255,8 @@ function App() {
   const [editingPT, setEditingPT] = useState(null); // {pid, pt:{...}, isNew:bool}
   const [editingModel, setEditingModel] = useState(null); // {pid, m:{...}, isNew:bool}
   const [modelFilterType, setModelFilterType] = useState(null); // ptId filter
+  const [posNewModelKey, setPosNewModelKey] = useState(null); // lineKey of active inline-add
+  const [posNewModelName, setPosNewModelName] = useState("");
   const [editingExp, setEditingExp] = useState(null);
 
   const [session, setSession] = useState(()=>{
@@ -1562,7 +1564,7 @@ function expCost(exp) {
   // ── Models CRUD ─────────────────────────────────────────────
   function addModel(pid, m) {
     const uid=getUserId(); if(!uid||!pid) return;
-    const newM={...m, id:gid(), cost:Number(m.cost||0), active:true};
+    const newM={...m, id:m.id||gid(), cost:Number(m.cost||0), active:true};
     setDb(d=>({...d,projects:d.projects.map(p=>p.id!==pid?p:{...p,models:[...(p.models||[]),newM]})}));
     db_.insert('models',{id:newM.id,user_id:uid,project_id:pid,product_type_id:newM.product_type_id||null,name:newM.name,cost:newM.cost,active:true}).catch(console.error);
     toast_("Model added ✦");
@@ -2171,16 +2173,34 @@ function expCost(exp) {
                         <span style={{fontSize:14,fontWeight:700,color:"#FAF7F0",minWidth:40,textAlign:"right"}}>{fmtGBP(linePrice)}</span>
                       </div>
                     </div>
-                    {item.qty>0&&typeModels.length>0&&<div style={{marginBottom:8,marginTop:2}}>
+                    {item.qty>0&&<div style={{marginBottom:8,marginTop:2}}>
                       {Array.from({length:item.qty}).map((_,mi)=>{
                         const lineKey=item.typeId+'_'+mi;
                         const selMid=posModelLines[lineKey]||"";
+                        const isAddingNew=posNewModelKey===lineKey;
+                        function confirmNewModel(){
+                          const nm=posNewModelName.trim();
+                          if(!nm){setPosNewModelKey(null);setPosNewModelName("");return;}
+                          const newId=gid();
+                          addModel(sel.pid,{id:newId,name:nm,cost:0,product_type_id:item.typeId,active:true});
+                          setPosModelLines(v=>({...v,[lineKey]:newId}));
+                          setPosNewModelKey(null);setPosNewModelName("");
+                        }
                         return <div key={mi} style={{marginBottom:4}}>
                           <div style={{fontSize:10,color:"#FAD5C8",marginBottom:3}}>{item.unit||"Pair"} {mi+1} model</div>
-                          <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                          <div style={{display:"flex",flexWrap:"wrap",gap:4,alignItems:"center"}}>
                             <span style={{background:!selMid?"#FAF7F0":"rgba(250,247,240,0.1)",border:"1px solid rgba(250,247,240,0.3)",borderRadius:5,padding:"2px 8px",fontSize:10,color:!selMid?"#8B1A0F":"#FAD5C8",cursor:"pointer"}} onClick={()=>setPosModelLines(v=>{const n={...v};delete n[lineKey];return n;})}>—</span>
                             {typeModels.map(m=><span key={m.id} style={{background:selMid===m.id?"#FAF7F0":"rgba(250,247,240,0.1)",border:"1px solid rgba(250,247,240,0.3)",borderRadius:5,padding:"2px 8px",fontSize:10,color:selMid===m.id?"#8B1A0F":"#FAD5C8",cursor:"pointer"}} onClick={()=>setPosModelLines(v=>({...v,[lineKey]:m.id}))}>{m.name}</span>)}
+                            {!isAddingNew&&<span style={{background:"rgba(250,247,240,0.08)",border:"1px dashed rgba(250,247,240,0.4)",borderRadius:5,padding:"2px 8px",fontSize:10,color:"#FAD5C8",cursor:"pointer"}} onClick={()=>{setPosNewModelKey(lineKey);setPosNewModelName("");}}>+ New</span>}
                           </div>
+                          {isAddingNew&&<div style={{display:"flex",gap:4,marginTop:5}}>
+                            <input autoFocus style={{flex:1,background:"#5A1A0A",border:"1px solid rgba(250,247,240,0.5)",borderRadius:6,padding:"4px 8px",color:"#FAF7F0",fontSize:11,outline:"none",fontFamily:"inherit"}}
+                              placeholder="Model adı..." value={posNewModelName}
+                              onChange={e=>setPosNewModelName(e.target.value)}
+                              onKeyDown={e=>{if(e.key==="Enter")confirmNewModel();if(e.key==="Escape"){setPosNewModelKey(null);setPosNewModelName("");}}}/>
+                            <span style={{background:"#FAF7F0",color:"#8B1A0F",borderRadius:6,padding:"4px 10px",fontSize:11,fontWeight:700,cursor:"pointer"}} onClick={confirmNewModel}>✓</span>
+                            <span style={{background:"rgba(250,247,240,0.1)",color:"#FAD5C8",borderRadius:6,padding:"4px 8px",fontSize:11,cursor:"pointer"}} onClick={()=>{setPosNewModelKey(null);setPosNewModelName("");}}>✕</span>
+                          </div>}
                         </div>;
                       })}
                     </div>}
