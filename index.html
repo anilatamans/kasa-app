@@ -991,7 +991,7 @@ function RecurModal({initial, onSave, onClose}) {
   </div></div>;
 }
 
-function EditEntryModal({entry, onSave, onClose, availGoals=[], currentGoalId=null, onMove=null, allModels=[], allProductTypes=[]}) {
+function EditEntryModal({entry, onSave, onClose, availGoals=[], currentGoalId=null, onMove=null, allModels=[], allProductTypes=[], onAddModel=null}) {
   const [e, setE] = useState({...entry});
   // Parse cart_items
   const parsedCart = React.useMemo(()=>{
@@ -1016,15 +1016,22 @@ function EditEntryModal({entry, onSave, onClose, availGoals=[], currentGoalId=nu
   // For entries WITHOUT cart_items: manual type + model assignment
   const [manualTypeId, setManualTypeId] = useState("");
   const [manualModels, setManualModels] = useState({});
+  // Inline new-model creation state (shared for both parsedCart and manual sections)
+  const [newModelKey, setNewModelKey] = useState(null); // "typeId_pairIdx" or "manual_pairIdx"
+  const [newModelName, setNewModelName] = useState("");
 
   function buildCartItems(){
     if(parsedCart){
       return parsedCart.map(ci=>({
         ...ci,
-        models:(ci.models||[]).map((_,mi)=>{
+        models:(ci.models||[]).map((orig,mi)=>{
           const mid=editModels[ci.typeId+'_'+mi];
-          const m=allModels.find(x=>x.id===mid);
-          return m?{id:m.id,name:m.name}:null;
+          if(mid){
+            const m=allModels.find(x=>x.id===mid);
+            return m?{modelId:m.id,name:m.name,cost:Number(m.cost||0)}:null;
+          }
+          // keep original if user didn't change it
+          return orig||null;
         })
       }));
     }
@@ -1072,17 +1079,40 @@ function EditEntryModal({entry, onSave, onClose, availGoals=[], currentGoalId=nu
           <div style={{fontSize:12,fontWeight:700,color:"#FAF7F0",marginBottom:6}}>{ci.typeName} × {ci.qty}</div>
           {Array.from({length:ci.qty}).map((_,mi)=>{
             const lineKey=ci.typeId+'_'+mi;
-            const selMid=editModels[lineKey]||"";
+            const storedMid=ci.models&&ci.models[mi]&&(ci.models[mi].modelId||ci.models[mi].id);
+            const selMid=editModels[lineKey]||(storedMid&&allModels.find(m=>m.id===storedMid)?storedMid:"")||"";
+            const isAddingNew=newModelKey===lineKey;
+            function confirmNew(){
+              const nm=newModelName.trim();
+              if(!nm){setNewModelKey(null);setNewModelName("");return;}
+              const dup=(allModels.filter(m=>m.product_type_id===ci.typeId)).some(m=>m.name.trim().toLowerCase()===nm.toLowerCase());
+              if(dup){alert("Bu isimde model zaten var / Model already exists");return;}
+              const newId=gid();
+              const defCost=Number((allProductTypes.find(p=>p.id===ci.typeId)||{}).defaultModelCost||0);
+              if(onAddModel) onAddModel(ci.typeId,{id:newId,name:nm,cost:defCost,product_type_id:ci.typeId,active:true});
+              setEditModels(v=>({...v,[lineKey]:newId}));
+              setNewModelKey(null);setNewModelName("");
+            }
             return <div key={mi} style={{marginBottom:5}}>
               <div style={{fontSize:10,color:"#FAD5C8",marginBottom:3}}>Pair {mi+1}</div>
-              <div style={{display:"flex",gap:5,alignItems:"center"}}>
-                <select style={{flex:1,background:"#5A1A0A",border:"1px solid rgba(250,247,240,0.35)",borderRadius:7,padding:"5px 8px",color:selMid?"#FAF7F0":"#FAD5C8",fontSize:12,outline:"none",fontFamily:"inherit"}}
-                  value={selMid} onChange={ev=>setEditModels(v=>({...v,[lineKey]:ev.target.value}))}>
-                  <option value="">— select / seçiniz —</option>
-                  {typeModels.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}
-                </select>
-                {selMid&&<span style={{background:"rgba(250,247,240,0.12)",border:"1px solid rgba(250,247,240,0.3)",borderRadius:6,padding:"4px 8px",fontSize:13,color:"#FAD5C8",cursor:"pointer"}} onClick={()=>setEditModels(v=>{const n={...v};delete n[lineKey];return n;})}>×</span>}
-              </div>
+              {isAddingNew
+                ?<div style={{display:"flex",gap:5,alignItems:"center"}}>
+                  <input autoFocus style={{flex:1,background:"#5A1A0A",border:"1px solid rgba(250,247,240,0.5)",borderRadius:7,padding:"5px 8px",color:"#FAF7F0",fontSize:12,outline:"none",fontFamily:"inherit"}}
+                    placeholder="Model adı..." value={newModelName} onChange={ev=>setNewModelName(ev.target.value)}
+                    onKeyDown={ev=>{if(ev.key==="Enter")confirmNew();if(ev.key==="Escape"){setNewModelKey(null);setNewModelName("");}}}/>
+                  <span style={{background:"#5A1A0A",border:"1px solid rgba(250,247,240,0.3)",borderRadius:6,padding:"4px 8px",fontSize:12,color:"#FAD5C8",cursor:"pointer"}} onClick={confirmNew}>✓</span>
+                  <span style={{background:"rgba(250,247,240,0.1)",border:"1px solid rgba(250,247,240,0.2)",borderRadius:6,padding:"4px 8px",fontSize:12,color:"#FAD5C8",cursor:"pointer"}} onClick={()=>{setNewModelKey(null);setNewModelName("");}}>✕</span>
+                </div>
+                :<div style={{display:"flex",gap:5,alignItems:"center"}}>
+                  <select style={{flex:1,background:"#5A1A0A",border:"1px solid rgba(250,247,240,0.35)",borderRadius:7,padding:"5px 8px",color:selMid?"#FAF7F0":"#FAD5C8",fontSize:12,outline:"none",fontFamily:"inherit"}}
+                    value={selMid} onChange={ev=>setEditModels(v=>({...v,[lineKey]:ev.target.value}))}>
+                    <option value="">— select / seçiniz —</option>
+                    {typeModels.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}
+                  </select>
+                  {selMid&&<span style={{background:"rgba(250,247,240,0.12)",border:"1px solid rgba(250,247,240,0.3)",borderRadius:6,padding:"4px 8px",fontSize:13,color:"#FAD5C8",cursor:"pointer"}} onClick={()=>setEditModels(v=>{const n={...v};delete n[lineKey];return n;})}>×</span>}
+                  {onAddModel&&<span style={{background:"rgba(250,247,240,0.08)",border:"1px solid rgba(250,247,240,0.2)",borderRadius:6,padding:"4px 8px",fontSize:11,color:"#FAD5C8",cursor:"pointer",whiteSpace:"nowrap"}} onClick={()=>{setNewModelKey(lineKey);setNewModelName("");}}>+ New</span>}
+                </div>
+              }
             </div>;
           })}
         </div>;
@@ -1103,17 +1133,40 @@ function EditEntryModal({entry, onSave, onClose, availGoals=[], currentGoalId=nu
         const units=Math.max(1,parseInt(e.units)||1);
         const tModels=allModels.filter(m=>m.product_type_id===manualTypeId&&m.active!==false).sort((a,b)=>a.name.localeCompare(b.name));
         return Array.from({length:units}).map((_,mi)=>{
+          const mKey='manual_'+mi;
           const selMid=manualModels[mi]||"";
+          const isAddingNew=newModelKey===mKey;
+          function confirmNewManual(){
+            const nm=newModelName.trim();
+            if(!nm){setNewModelKey(null);setNewModelName("");return;}
+            const dup=tModels.some(m=>m.name.trim().toLowerCase()===nm.toLowerCase());
+            if(dup){alert("Bu isimde model zaten var / Model already exists");return;}
+            const newId=gid();
+            const defCost=Number((allProductTypes.find(p=>p.id===manualTypeId)||{}).defaultModelCost||0);
+            if(onAddModel) onAddModel(manualTypeId,{id:newId,name:nm,cost:defCost,product_type_id:manualTypeId,active:true});
+            setManualModels(v=>({...v,[mi]:newId}));
+            setNewModelKey(null);setNewModelName("");
+          }
           return <div key={mi} style={{marginBottom:6}}>
             <div style={{fontSize:10,color:"#FAD5C8",marginBottom:3}}>Pair {mi+1}</div>
-            <div style={{display:"flex",gap:5,alignItems:"center"}}>
-              <select style={{...selSt,padding:"6px 9px",fontSize:12,background:"#5A1A0A"}}
-                value={selMid} onChange={ev=>setManualModels(v=>({...v,[mi]:ev.target.value}))}>
-                <option value="">— select / seçiniz —</option>
-                {tModels.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}
-              </select>
-              {selMid&&<span style={{background:"rgba(250,247,240,0.12)",border:"1px solid rgba(250,247,240,0.3)",borderRadius:6,padding:"4px 8px",fontSize:13,color:"#FAD5C8",cursor:"pointer"}} onClick={()=>setManualModels(v=>{const n={...v};delete n[mi];return n;})}>×</span>}
-            </div>
+            {isAddingNew
+              ?<div style={{display:"flex",gap:5,alignItems:"center"}}>
+                <input autoFocus style={{flex:1,background:"#5A1A0A",border:"1px solid rgba(250,247,240,0.5)",borderRadius:7,padding:"5px 8px",color:"#FAF7F0",fontSize:12,outline:"none",fontFamily:"inherit"}}
+                  placeholder="Model adı..." value={newModelName} onChange={ev=>setNewModelName(ev.target.value)}
+                  onKeyDown={ev=>{if(ev.key==="Enter")confirmNewManual();if(ev.key==="Escape"){setNewModelKey(null);setNewModelName("");}}}/>
+                <span style={{background:"#5A1A0A",border:"1px solid rgba(250,247,240,0.3)",borderRadius:6,padding:"4px 8px",fontSize:12,color:"#FAD5C8",cursor:"pointer"}} onClick={confirmNewManual}>✓</span>
+                <span style={{background:"rgba(250,247,240,0.1)",border:"1px solid rgba(250,247,240,0.2)",borderRadius:6,padding:"4px 8px",fontSize:12,color:"#FAD5C8",cursor:"pointer"}} onClick={()=>{setNewModelKey(null);setNewModelName("");}}>✕</span>
+              </div>
+              :<div style={{display:"flex",gap:5,alignItems:"center"}}>
+                <select style={{...selSt,padding:"6px 9px",fontSize:12,background:"#5A1A0A"}}
+                  value={selMid} onChange={ev=>setManualModels(v=>({...v,[mi]:ev.target.value}))}>
+                  <option value="">— select / seçiniz —</option>
+                  {tModels.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}
+                </select>
+                {selMid&&<span style={{background:"rgba(250,247,240,0.12)",border:"1px solid rgba(250,247,240,0.3)",borderRadius:6,padding:"4px 8px",fontSize:13,color:"#FAD5C8",cursor:"pointer"}} onClick={()=>setManualModels(v=>{const n={...v};delete n[mi];return n;})}>×</span>}
+                {onAddModel&&<span style={{background:"rgba(250,247,240,0.08)",border:"1px solid rgba(250,247,240,0.2)",borderRadius:6,padding:"4px 8px",fontSize:11,color:"#FAD5C8",cursor:"pointer",whiteSpace:"nowrap"}} onClick={()=>{setNewModelKey(mKey);setNewModelName("");}}>+ New</span>}
+              </div>
+            }
           </div>;
         });
       })()}
@@ -1569,18 +1622,22 @@ function calcCOGS(entries, liveModels, liveProductTypes){
     cart.forEach(ci=>{
       const pt=(liveProductTypes||[]).find(p=>p.id===ci.typeId);
       const defCost=pt?Number(pt.defaultModelCost||pt.default_model_cost||0):0;
-      // If no models stored at all, use defCost × qty directly
+      // avg of live model costs as additional fallback when defCost=0
+      const ptModels=(liveModels||[]).filter(m=>m.product_type_id===ci.typeId&&Number(m.cost||0)>0);
+      const avgCost=ptModels.length>0?ptModels.reduce((s,m)=>s+Number(m.cost||0),0)/ptModels.length:0;
+      const fallbackCost=defCost>0?defCost:avgCost;
+      // If no models stored at all, use fallbackCost × qty directly
       if(!ci.models||ci.models.length===0){
-        if(defCost===0) return;
+        if(fallbackCost===0) return;
         const key=en.date+'___'+ci.typeName;
         if(!map[key]) map[key]={date:en.date,typeName:ci.typeName,qty:0,totalCost:0};
         map[key].qty+=ci.qty;
-        map[key].totalCost+=defCost*ci.qty;
+        map[key].totalCost+=fallbackCost*ci.qty;
         return;
       }
       let cost=0;
       ci.models.forEach(m=>{
-        if(!m){cost+=defCost;return;} // null slot → type default
+        if(!m){cost+=fallbackCost;return;} // null slot → fallback
         // 1. stored cost
         const stored=Number(m.cost||0);
         if(stored>0){cost+=stored;return;}
@@ -1589,8 +1646,8 @@ function calcCOGS(entries, liveModels, liveProductTypes){
         const fm=mid?(liveModels||[]).find(x=>x.id===mid):null;
         const liveCost=fm?Number(fm.cost||0):0;
         if(liveCost>0){cost+=liveCost;return;}
-        // 3. type defaultModelCost fallback
-        cost+=defCost;
+        // 3. fallback (defCost or avgCost)
+        cost+=fallbackCost;
       });
       if(cost===0) return;
       const key=en.date+'___'+ci.typeName;
@@ -2157,6 +2214,7 @@ function expCost(exp) {
       currentGoalId={mod.editEntry.gid_}
       allModels={(()=>{const pid=mod.editEntry.pid;if(pid){const p=db.projects.find(pr=>pr.id===pid);return p?p.models||[]:[]}return[];})()}
       allProductTypes={(()=>{const pid=mod.editEntry.pid;if(pid){const p=db.projects.find(pr=>pr.id===pid);return p?p.productTypes||[]:[]}return[];})()}
+      onAddModel={(typeId,newM)=>{addModel(mod.editEntry.pid,newM);}}
       availGoals={(()=>{
         const pid=mod.editEntry.pid;
         if(pid){const p=db.projects.find(pr=>pr.id===pid);return (p&&p.goals||[]).filter(g=>!g.archived);}
@@ -2863,7 +2921,7 @@ function expCost(exp) {
             </div>
           </>}
         </div>
-        <Tabs tabs={["entries","expenses","insights","recurring"]} active={goalTab} color={c} onChange={setGoalTab}/>
+        <Tabs tabs={["entries","expenses","products","insights","recurring"]} active={goalTab} color={c} onChange={setGoalTab}/>
         {goalTab==="expenses"&&(()=>{
           // COGS for this goal + sub-goals
           const goalEntriesForCOGS=[
@@ -2943,6 +3001,60 @@ function expCost(exp) {
           </>;
         })()}
         {goalTab==="entries"&&<GoalEntriesView entries={selGoal.entries||[]} sel={sel} products={(selProj&&selProj.products)||[]} setMod={setMod} delEntry={delEntry}/>}
+        {goalTab==="products"&&(()=>{
+          // Collect all entries with cart_items from this goal + sub-goals
+          const goalAllEntries=[
+            ...(selGoal.entries||[]),
+            ...collectEntriesWithCart(selGoal.subGoals||[])
+          ];
+          // Build product summary: typeId → {typeName, totalQty, totalRev, byDate}
+          const ptMap={};
+          goalAllEntries.forEach(en=>{
+            let cart;
+            try{cart=en.cart_items?(typeof en.cart_items==="string"?JSON.parse(en.cart_items):en.cart_items):null;}catch(_){cart=null;}
+            if(!Array.isArray(cart)) return;
+            cart.forEach(ci=>{
+              if(!ptMap[ci.typeId]) ptMap[ci.typeId]={typeName:ci.typeName,totalQty:0,totalRev:0,days:{}};
+              ptMap[ci.typeId].totalQty+=ci.qty;
+              ptMap[ci.typeId].totalRev+=Number(ci.lineTotal||0);
+              const d=en.date||"";
+              if(!ptMap[ci.typeId].days[d]) ptMap[ci.typeId].days[d]={qty:0,rev:0};
+              ptMap[ci.typeId].days[d].qty+=ci.qty;
+              ptMap[ci.typeId].days[d].rev+=Number(ci.lineTotal||0);
+            });
+          });
+          const ptRows=Object.values(ptMap).sort((a,b)=>b.totalRev-a.totalRev);
+          if(ptRows.length===0) return <div style={{color:"#FAD5C8",fontSize:13,textAlign:"center",padding:"32px 0"}}>No sale data yet — use the Sale button to add sales with product types.</div>;
+          return <div>
+            {ptRows.map(pt=>(
+              <div key={pt.typeName} style={{marginBottom:14}}>
+                <div style={{background:"#A02218",borderRadius:10,padding:"12px 14px",marginBottom:6}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                    <div style={{fontSize:14,fontWeight:700,color:"#FAF7F0"}}>{pt.typeName}</div>
+                    <div style={{textAlign:"right"}}>
+                      <div style={{fontSize:15,fontWeight:700,color:c}}>{fmtGBP(pt.totalRev)}</div>
+                      <div style={{fontSize:11,color:"#FAD5C8"}}>{pt.totalQty} pairs</div>
+                    </div>
+                  </div>
+                  {/* daily breakdown */}
+                  {Object.entries(pt.days).sort((a,b)=>a[0].localeCompare(b[0])).map(([date,d])=>(
+                    <div key={date} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"5px 0",borderTop:"1px solid rgba(250,247,240,0.1)"}}>
+                      <div style={{fontSize:12,color:"#FAD5C8"}}>{new Date(date+"T00:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"2-digit",month:"short"})}</div>
+                      <div style={{display:"flex",gap:10,alignItems:"center"}}>
+                        <span style={{fontSize:11,color:"rgba(250,247,240,0.55)"}}>{d.qty} pairs</span>
+                        <span style={{fontSize:12,fontWeight:600,color:"#FAF7F0"}}>{fmtGBP(d.rev)}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+            <div style={{padding:"10px 14px",background:"#721408",borderRadius:8,display:"flex",justifyContent:"space-between",marginTop:4}}>
+              <span style={{fontSize:13,fontWeight:600,color:"#FAF7F0"}}>Total</span>
+              <span style={{fontSize:14,fontWeight:700,color:c}}>{fmtGBP(ptRows.reduce((s,r)=>s+r.totalRev,0))}</span>
+            </div>
+          </div>;
+        })()}
         {goalTab==="insights"&&<GoalInsights goal={selGoal} color={c} showProj={sel&&!!sel.pid} projData={sel&&sel.pid?db.projects.find(p=>p.id===sel.pid):null}/>}
         {goalTab==="recurring"&&(()=>{
           const rawRec=selGoal.recurring;
