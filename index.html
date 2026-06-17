@@ -1110,7 +1110,7 @@ function EditEntryModal({entry, onSave, onClose, availGoals=[], currentGoalId=nu
                     {typeModels.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}
                   </select>
                   {selMid&&<span style={{background:"rgba(250,247,240,0.12)",border:"1px solid rgba(250,247,240,0.3)",borderRadius:6,padding:"4px 8px",fontSize:13,color:"#FAD5C8",cursor:"pointer"}} onClick={()=>setEditModels(v=>{const n={...v};delete n[lineKey];return n;})}>×</span>}
-                  {onAddModel&&<span style={{background:"rgba(250,247,240,0.08)",border:"1px solid rgba(250,247,240,0.2)",borderRadius:6,padding:"4px 8px",fontSize:11,color:"#FAD5C8",cursor:"pointer",whiteSpace:"nowrap"}} onClick={()=>{setNewModelKey(lineKey);setNewModelName("");}}>+ New</span>}
+                  {onAddModel&&<span style={{background:"rgba(250,247,240,0.22)",border:"1px solid rgba(250,247,240,0.5)",borderRadius:6,padding:"4px 9px",fontSize:12,fontWeight:600,color:"#FAF7F0",cursor:"pointer",whiteSpace:"nowrap"}} onClick={()=>{setNewModelKey(lineKey);setNewModelName("");}}>+ New</span>}
                 </div>
               }
             </div>;
@@ -1164,7 +1164,7 @@ function EditEntryModal({entry, onSave, onClose, availGoals=[], currentGoalId=nu
                   {tModels.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}
                 </select>
                 {selMid&&<span style={{background:"rgba(250,247,240,0.12)",border:"1px solid rgba(250,247,240,0.3)",borderRadius:6,padding:"4px 8px",fontSize:13,color:"#FAD5C8",cursor:"pointer"}} onClick={()=>setManualModels(v=>{const n={...v};delete n[mi];return n;})}>×</span>}
-                {onAddModel&&<span style={{background:"rgba(250,247,240,0.08)",border:"1px solid rgba(250,247,240,0.2)",borderRadius:6,padding:"4px 8px",fontSize:11,color:"#FAD5C8",cursor:"pointer",whiteSpace:"nowrap"}} onClick={()=>{setNewModelKey(mKey);setNewModelName("");}}>+ New</span>}
+                {onAddModel&&<span style={{background:"rgba(250,247,240,0.22)",border:"1px solid rgba(250,247,240,0.5)",borderRadius:6,padding:"4px 9px",fontSize:12,fontWeight:600,color:"#FAF7F0",cursor:"pointer",whiteSpace:"nowrap"}} onClick={()=>{setNewModelKey(mKey);setNewModelName("");}}>+ New</span>}
               </div>
             }
           </div>;
@@ -1620,10 +1620,13 @@ function calcCOGS(entries, liveModels, liveProductTypes){
     try{cart=typeof en.cart_items==="string"?JSON.parse(en.cart_items):en.cart_items;}catch(_){return;}
     if(!Array.isArray(cart)||!cart.length) return;
     cart.forEach(ci=>{
-      const pt=(liveProductTypes||[]).find(p=>p.id===ci.typeId);
+      // Find product type by ID first, then by name (handles deleted+recreated types)
+      let pt=(liveProductTypes||[]).find(p=>p.id===ci.typeId);
+      if(!pt&&ci.typeName) pt=(liveProductTypes||[]).find(p=>p.name===ci.typeName);
       const defCost=pt?Number(pt.defaultModelCost||pt.default_model_cost||0):0;
-      // avg of live model costs as additional fallback when defCost=0
-      const ptModels=(liveModels||[]).filter(m=>m.product_type_id===ci.typeId&&Number(m.cost||0)>0);
+      // avg of live model costs — match by resolved type ID OR original typeId
+      const resolvedTypeId=pt?pt.id:ci.typeId;
+      const ptModels=(liveModels||[]).filter(m=>(m.product_type_id===resolvedTypeId||m.product_type_id===ci.typeId)&&Number(m.cost||0)>0);
       const avgCost=ptModels.length>0?ptModels.reduce((s,m)=>s+Number(m.cost||0),0)/ptModels.length:0;
       const fallbackCost=defCost>0?defCost:avgCost;
       // If no models stored at all, use fallbackCost × qty directly
@@ -1638,18 +1641,26 @@ function calcCOGS(entries, liveModels, liveProductTypes){
       let cost=0;
       ci.models.forEach(m=>{
         if(!m){cost+=fallbackCost;return;} // null slot → fallback
-        // 1. stored cost
+        // 1. stored cost in cart_items
         const stored=Number(m.cost||0);
         if(stored>0){cost+=stored;return;}
-        // 2. live model lookup
+        // 2. live model lookup by ID
         const mid=m.modelId||m.id;
         const fm=mid?(liveModels||[]).find(x=>x.id===mid):null;
         const liveCost=fm?Number(fm.cost||0):0;
         if(liveCost>0){cost+=liveCost;return;}
-        // 3. fallback (defCost or avgCost)
+        // 3. live model lookup by NAME (handles deleted/recreated models)
+        if(m.name&&m.name!=="—"){
+          const fmByName=(liveModels||[]).find(x=>x.name===m.name&&Number(x.cost||0)>0);
+          if(fmByName){cost+=Number(fmByName.cost);return;}
+        }
+        // 4. fallback (defaultModelCost or avg of type's live models)
         cost+=fallbackCost;
       });
-      if(cost===0) return;
+      // Fill any pairs not represented in models array with fallback
+      if(ci.models.length<ci.qty) cost+=(ci.qty-ci.models.length)*fallbackCost;
+      // Only skip if truly no cost info at all
+      if(cost===0&&fallbackCost===0) return;
       const key=en.date+'___'+ci.typeName;
       if(!map[key]) map[key]={date:en.date,typeName:ci.typeName,qty:0,totalCost:0};
       map[key].qty+=ci.qty;
@@ -2805,7 +2816,7 @@ function expCost(exp) {
                   <div style={{fontSize:13,fontWeight:600,color:"#FAF7F0"}}>{pt.name}</div>
                   <div style={{fontSize:11,color:"rgba(250,247,240,0.6)",marginTop:2}}>{fmtPricing(pt)} · {mods.filter(m=>m.product_type_id===pt.id).length} models</div>
                 </div>
-                <button style={btnSm} onClick={()=>setEditingPT({pid:selProj.id,isNew:false,pt:{...pt}})}>Edit</button>
+                <button style={btnSm} onClick={()=>{const tms=mods.filter(m=>m.product_type_id===pt.id&&Number(m.cost||0)>0);const ac=tms.length>0?tms.reduce((s,m)=>s+Number(m.cost||0),0)/tms.length:0;setEditingPT({pid:selProj.id,isNew:false,pt:{...pt,defaultModelCost:Number(pt.defaultModelCost||0)>0?Number(pt.defaultModelCost||0):ac}});}}>Edit</button>
                 <button style={{...btnSm,marginLeft:4,opacity:0.5}} onClick={()=>setMod(m=>({...m,confirm:{text:`Delete "${pt.name}" type? Models linked to it will be unlinked.`,fn:()=>{delProductType(selProj.id,pt.id);if(modelFilterType===pt.id)setModelFilterType(null);}}}))}>×</button>
               </div>;
             })}
