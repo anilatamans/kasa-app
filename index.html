@@ -957,13 +957,13 @@ function GoalInsights({goal, color, showProj=false, projData=null}) {
 
 
 // ── MODALS ──
-function ConfirmModal({text, onConfirm, onClose}) {
+function ConfirmModal({text, onConfirm, onClose, confirmLabel="Delete", title="Emin misin? / Confirm"}) {
   return <div style={S.overlay}><div style={S.modal}>
-    <div style={{fontSize:18,fontWeight:700,marginBottom:10}}>Confirm Delete</div>
-    <div style={{fontSize:15,color:"#FAF7F0",marginBottom:16,lineHeight:1.5}}>{text}</div>
+    <div style={{fontSize:17,fontWeight:700,marginBottom:10}}>{title}</div>
+    <div style={{fontSize:14,color:"#FAF7F0",marginBottom:18,lineHeight:1.6}}>{text}</div>
     <div style={{display:"flex",gap:8}}>
-      <button style={S.btnGhost} onClick={onClose}>Cancel</button>
-      <button style={{...S.btn,background:"#8B1A0F",color:"#fff"}} onClick={onConfirm}>Delete</button>
+      <button style={S.btnGhost} onClick={onClose}>İptal / Cancel</button>
+      <button style={{...S.btn,background:"#8B1A0F",color:"#fff"}} onClick={onConfirm}>{confirmLabel}</button>
     </div>
   </div></div>;
 }
@@ -1124,7 +1124,7 @@ function EditEntryModal({entry, onSave, onClose, availGoals=[], currentGoalId=nu
       <div style={{display:"flex",flexDirection:"column",gap:5,maxHeight:140,overflowY:"auto"}}>
         {availGoals.filter(g=>g.id!==currentGoalId).map(g=>(
           <div key={g.id} style={{background:"#8B1A0F",border:"1px solid #FAF7F0",borderRadius:8,padding:"9px 12px",fontSize:13,cursor:"pointer",color:"#FAF7F0"}}
-            onClick={()=>{onMove&&onMove(g.id);}}>
+            onClick={()=>{onMove&&onMove(g.id,g.name);}}>
             → {g.name}
           </div>
         ))}
@@ -1281,7 +1281,13 @@ function GoalEntriesView({entries, sel, products, setMod, delEntry}) {
   });
   var sorted = Object.values(groups).sort(function(a,b){return b.date.localeCompare(a.date);});
   function handleEdit(e){setMod(function(m){return {...m,editEntry:{entry:e,gid_:sel.gid_,pid:sel.pid}};});}
-  function handleDel(eid){delEntry(eid,sel.gid_,sel.pid);}
+  function handleDel(eid, label){
+    setMod(m=>({...m,confirm:{
+      text:`"${label||'Bu girdi'}" silinsin mi? Bu işlem geri alınamaz.`,
+      confirmLabel:"Sil / Delete",
+      fn:()=>{delEntry(eid,sel.gid_,sel.pid);setMod(m2=>({...m2,confirm:null}));}
+    }}));
+  }
   return <GroupedEntries groups={sorted} onEdit={handleEdit} onDelete={handleDel} products={products||[]}/>;
 }
 
@@ -1308,7 +1314,7 @@ function GroupedEntries({groups, onEdit, onDelete, products}) {
             <span style={{fontSize:14,fontWeight:700,color:"#FAF7F0"}}>{fmtGBP(g.total)}</span>
             {isMulti?<span style={{fontSize:11,color:"#FAD5C8"}}>{isOpen?"▲":"▼"}</span>:<>
               <span style={{cursor:"pointer",fontSize:15,color:"#FAD5C8"}} onClick={function(e){e.stopPropagation();onEdit(g.entries[0]);}}>✎</span>
-              <span style={{cursor:"pointer",fontSize:15,color:"#FAD5C8",opacity:0.6}} onClick={function(e){e.stopPropagation();onDelete(g.entries[0].id);}}>×</span>
+              <span style={{cursor:"pointer",fontSize:15,color:"#FAD5C8",opacity:0.6}} onClick={function(e){e.stopPropagation();onDelete(g.entries[0].id, g.entries[0].note||g.date);}}>×</span>
             </>}
           </div>
         </div>
@@ -1321,7 +1327,7 @@ function GroupedEntries({groups, onEdit, onDelete, products}) {
             </div>
             <span style={{fontSize:13,fontWeight:700,color:"#FAF7F0",marginRight:8}}>{fmtGBP(e.amount)}</span>
             <span style={{cursor:"pointer",fontSize:13,color:"#FAD5C8"}} onClick={function(){onEdit(e);}}>✎</span>
-            <span style={{cursor:"pointer",fontSize:13,color:"#FAD5C8",opacity:0.6,marginLeft:4}} onClick={function(){onDelete(e.id);}}>×</span>
+            <span style={{cursor:"pointer",fontSize:13,color:"#FAD5C8",opacity:0.6,marginLeft:4}} onClick={function(){onDelete(e.id, e.note||e.date);}}>×</span>
           </div>;
         })}
       </div>}
@@ -1381,6 +1387,15 @@ function App() {
   const [syncStatus, setSyncStatus] = useState('idle'); // idle | syncing | error
   const navRestoredRef = React.useRef(false);
   const isPopStateRef = React.useRef(false);
+  const posBodyRef = React.useRef(null);
+  const posScrollSave = React.useRef(null);
+  // Restore scroll position after cart state changes (prevents jump on + click)
+  React.useLayoutEffect(()=>{
+    if(posScrollSave.current!==null && posBodyRef.current){
+      posBodyRef.current.scrollTop=posScrollSave.current;
+      posScrollSave.current=null;
+    }
+  },[cart]);
 
   // Push navigation to browser history so back/forward buttons work
   useEffect(()=>{
@@ -2136,7 +2151,7 @@ function expCost(exp) {
         </div>
       );
     })()}
-    {mod.confirm&&<ConfirmModal text={mod.confirm.text} onConfirm={mod.confirm.fn} onClose={()=>setMod(m=>({...m,confirm:null}))}/>}
+    {mod.confirm&&<ConfirmModal text={mod.confirm.text} confirmLabel={mod.confirm.confirmLabel} title={mod.confirm.title} onConfirm={mod.confirm.fn} onClose={()=>setMod(m=>({...m,confirm:null}))}/>}
     {mod.editEntry&&<EditEntryModal
       entry={mod.editEntry.entry}
       currentGoalId={mod.editEntry.gid_}
@@ -2147,7 +2162,7 @@ function expCost(exp) {
         if(pid){const p=db.projects.find(pr=>pr.id===pid);return (p&&p.goals||[]).filter(g=>!g.archived);}
         return db.goals.filter(g=>!g.archived);
       })()}
-      onMove={(toGoalId)=>{moveEntry(mod.editEntry.entry,mod.editEntry.gid_,toGoalId,mod.editEntry.pid);}}
+      onMove={(toGoalId,toGoalName)=>{setMod(m=>({...m,editEntry:null,confirm:{title:"Taşınsın mı? / Confirm Move",text:`Bu girdi "${toGoalName}" hedefine taşınsın mı?`,confirmLabel:"Taşı / Move",fn:()=>{moveEntry(mod.editEntry.entry,mod.editEntry.gid_,toGoalId,mod.editEntry.pid);setMod(m2=>({...m2,confirm:null}));}}}));}}
       onClose={()=>setMod(m=>({...m,editEntry:null}))} onSave={updated=>{updGoal(mod.editEntry.gid_,g=>({...g,entries:(g.entries||[]).map(e=>e.id===updated.id?updated:e).sort((a,b)=>b.date.localeCompare(a.date))}),mod.editEntry.pid);db_.update('entries',updated.id,{amount:updated.amount,note:updated.note||null,date:updated.date,source:updated.source,units:updated.units||0,cart_items:updated.cart_items||null}).catch(console.error);setMod(m=>({...m,editEntry:null}));toast_("Updated ✦");}}/>}
     {mod.recur&&<RecurModal initial={mod.recur.data} onClose={()=>setMod(m=>({...m,recur:null}))} onSave={r=>{
       const newRule={...r,id:mod.recur.ruleId||gid(),lastApplied:today()};
@@ -2303,7 +2318,7 @@ function expCost(exp) {
               <button style={{background:"none",border:"none",color:"#FAF7F0",fontSize:22,cursor:"pointer"}} onClick={()=>setPosMode(false)}>×</button>
             </div>
 
-            <div style={{flex:1,overflowY:"auto",padding:"14px 14px 0"}}>
+            <div ref={posBodyRef} style={{flex:1,overflowY:"auto",padding:"14px 14px 0"}}>
               {/* Product Type Buttons */}
               {pts.length===0
                 ?<div style={{color:"#FAD5C8",fontSize:13,textAlign:"center",padding:"24px 0"}}>No product types — add them in the Products tab first</div>
@@ -2336,9 +2351,9 @@ function expCost(exp) {
                         <div style={{fontSize:13,color:"#FAF7F0",fontWeight:600}}>{item.typeName}</div>
                       </div>
                       <div style={{display:"flex",alignItems:"center",gap:8}}>
-                        <button style={{background:"rgba(250,247,240,0.2)",border:"none",color:"#FAF7F0",width:28,height:28,borderRadius:6,fontSize:16,cursor:"pointer"}} onClick={()=>removeFromCart(item.typeId)}>−</button>
+                        <button style={{background:"rgba(250,247,240,0.2)",border:"none",color:"#FAF7F0",width:28,height:28,borderRadius:6,fontSize:16,cursor:"pointer"}} onMouseDown={e=>e.preventDefault()} onClick={()=>{posScrollSave.current=posBodyRef.current?.scrollTop;removeFromCart(item.typeId);}}>−</button>
                         <span style={{fontSize:14,fontWeight:700,color:"#FAF7F0",minWidth:20,textAlign:"center"}}>{item.qty}</span>
-                        <button style={{background:"rgba(250,247,240,0.2)",border:"none",color:"#FAF7F0",width:28,height:28,borderRadius:6,fontSize:16,cursor:"pointer"}} onClick={()=>addToCart(pts.find(p=>p.id===item.typeId)||item)}>+</button>
+                        <button style={{background:"rgba(250,247,240,0.2)",border:"none",color:"#FAF7F0",width:28,height:28,borderRadius:6,fontSize:16,cursor:"pointer"}} onMouseDown={e=>e.preventDefault()} onClick={()=>{posScrollSave.current=posBodyRef.current?.scrollTop;addToCart(pts.find(p=>p.id===item.typeId)||item);}}>+</button>
                         <span style={{fontSize:14,fontWeight:700,color:"#FAF7F0",minWidth:40,textAlign:"right"}}>{fmtGBP(linePrice)}</span>
                       </div>
                     </div>
@@ -2869,7 +2884,7 @@ function expCost(exp) {
                 <div style={{flex:1,fontSize:13,fontWeight:600,color:"#FAF7F0",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{x.name}</div>
                 <div style={{fontSize:13,fontWeight:700,color:"#F87171",flexShrink:0,marginRight:4}}>{fmtGBP(expCost(x))}</div>
                 <button style={{background:"rgba(250,247,240,0.2)",border:"1px solid #FAF7F0",color:"#FAF7F0",borderRadius:5,fontSize:11,cursor:"pointer",padding:"3px 7px",marginRight:2}} onClick={()=>setEditingExp({pid:sel.pid,gid_:sel.gid_,exp:{...x}})}>Edit</button>
-                <button style={{background:"none",border:"none",color:"#FAF7F0",fontSize:17,cursor:"pointer",opacity:0.5}} onClick={()=>{updGoal(sel.gid_,g=>({...g,expenses:(g.expenses||[]).filter(e=>e.id!==x.id)}),sel.pid);db_.delete("expenses",x.id).catch(console.error);toast_("Deleted");}}>×</button>
+                <button style={{background:"none",border:"none",color:"#FAF7F0",fontSize:17,cursor:"pointer",opacity:0.5}} onClick={()=>setMod(m=>({...m,confirm:{text:`"${x.name}" gideri silinsin mi?`,confirmLabel:"Sil / Delete",fn:()=>{updGoal(sel.gid_,g=>({...g,expenses:(g.expenses||[]).filter(e=>e.id!==x.id)}),sel.pid);db_.delete("expenses",x.id).catch(console.error);toast_("Deleted");setMod(m2=>({...m2,confirm:null}));}}}))}>×</button>
               </div>
             ))}
             <div style={{padding:"9px 11px",background:"#721408",borderRadius:8,display:"flex",justifyContent:"space-between",marginBottom:8}}>
