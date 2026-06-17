@@ -1392,7 +1392,7 @@ function App() {
         })),
         productTypes: (productTypes||[]).filter(pt=>pt.project_id===p.id)
           .sort((a,b)=>(a.sort_order||0)-(b.sort_order||0))
-          .map(pt=>({...pt, unitPrice:Number(pt.unit_price||0), bundleTiers:pt.bundle_tiers||null})),
+          .map(pt=>({...pt, unitPrice:Number(pt.unit_price||0), bundleTiers:pt.bundle_tiers||null, defaultModelCost:Number(pt.default_model_cost||0)})),
         models: (models||[]).filter(m=>m.project_id===p.id).map(m=>({...m, cost:Number(m.cost||0)}))
       };});
 
@@ -1541,14 +1541,14 @@ function expCost(exp) {
   // ── Product Types CRUD ──────────────────────────────────────
   function addProductType(pid, pt) {
     const uid=getUserId(); if(!uid||!pid) return;
-    const newPt={...pt, id:gid(), unitPrice:Number(pt.unitPrice||0)};
+    const newPt={...pt, id:gid(), unitPrice:Number(pt.unitPrice||0), defaultModelCost:Number(pt.defaultModelCost||0)};
     setDb(d=>({...d,projects:d.projects.map(p=>p.id!==pid?p:{...p,productTypes:[...(p.productTypes||[]),newPt]})}));
-    db_.insert('product_types',{id:newPt.id,user_id:uid,project_id:pid,name:newPt.name,pricing:newPt.pricing,unit_price:newPt.unitPrice,bundle_tiers:newPt.bundleTiers||null,unit:newPt.unit||'pair',sort_order:(newPt.sort_order||0)}).catch(console.error);
+    db_.insert('product_types',{id:newPt.id,user_id:uid,project_id:pid,name:newPt.name,pricing:newPt.pricing,unit_price:newPt.unitPrice,bundle_tiers:newPt.bundleTiers||null,unit:newPt.unit||'pair',sort_order:(newPt.sort_order||0),default_model_cost:newPt.defaultModelCost}).catch(console.error);
     toast_("Product type added ✦");
   }
   function updateProductType(pid, ptId, updates) {
     setDb(d=>({...d,projects:d.projects.map(p=>p.id!==pid?p:{...p,productTypes:(p.productTypes||[]).map(pt=>pt.id===ptId?{...pt,...updates}:pt)})}));
-    const dbUpdates={name:updates.name,pricing:updates.pricing,unit_price:Number(updates.unitPrice||0),bundle_tiers:updates.bundleTiers||null,unit:updates.unit||'pair'};
+    const dbUpdates={name:updates.name,pricing:updates.pricing,unit_price:Number(updates.unitPrice||0),bundle_tiers:updates.bundleTiers||null,unit:updates.unit||'pair',default_model_cost:Number(updates.defaultModelCost||0)};
     db_.update('product_types',ptId,dbUpdates).catch(console.error);
     toast_("Saved ✦");
   }
@@ -2178,29 +2178,36 @@ function expCost(exp) {
                         const lineKey=item.typeId+'_'+mi;
                         const selMid=posModelLines[lineKey]||"";
                         const isAddingNew=posNewModelKey===lineKey;
+                        const typePt=pts.find(p=>p.id===item.typeId);
                         function confirmNewModel(){
                           const nm=posNewModelName.trim();
                           if(!nm){setPosNewModelKey(null);setPosNewModelName("");return;}
                           const newId=gid();
-                          addModel(sel.pid,{id:newId,name:nm,cost:0,product_type_id:item.typeId,active:true});
+                          const defCost=typePt?Number(typePt.defaultModelCost||0):0;
+                          addModel(sel.pid,{id:newId,name:nm,cost:defCost,product_type_id:item.typeId,active:true});
                           setPosModelLines(v=>({...v,[lineKey]:newId}));
                           setPosNewModelKey(null);setPosNewModelName("");
                         }
-                        return <div key={mi} style={{marginBottom:4}}>
+                        return <div key={mi} style={{marginBottom:5}}>
                           <div style={{fontSize:10,color:"#FAD5C8",marginBottom:3}}>{item.unit||"Pair"} {mi+1} model</div>
-                          <div style={{display:"flex",flexWrap:"wrap",gap:4,alignItems:"center"}}>
-                            <span style={{background:!selMid?"#FAF7F0":"rgba(250,247,240,0.1)",border:"1px solid rgba(250,247,240,0.3)",borderRadius:5,padding:"2px 8px",fontSize:10,color:!selMid?"#8B1A0F":"#FAD5C8",cursor:"pointer"}} onClick={()=>setPosModelLines(v=>{const n={...v};delete n[lineKey];return n;})}>—</span>
-                            {typeModels.map(m=><span key={m.id} style={{background:selMid===m.id?"#FAF7F0":"rgba(250,247,240,0.1)",border:"1px solid rgba(250,247,240,0.3)",borderRadius:5,padding:"2px 8px",fontSize:10,color:selMid===m.id?"#8B1A0F":"#FAD5C8",cursor:"pointer"}} onClick={()=>setPosModelLines(v=>({...v,[lineKey]:m.id}))}>{m.name}</span>)}
-                            {!isAddingNew&&<span style={{background:"rgba(250,247,240,0.08)",border:"1px dashed rgba(250,247,240,0.4)",borderRadius:5,padding:"2px 8px",fontSize:10,color:"#FAD5C8",cursor:"pointer"}} onClick={()=>{setPosNewModelKey(lineKey);setPosNewModelName("");}}>+ New</span>}
-                          </div>
-                          {isAddingNew&&<div style={{display:"flex",gap:4,marginTop:5}}>
-                            <input autoFocus style={{flex:1,background:"#5A1A0A",border:"1px solid rgba(250,247,240,0.5)",borderRadius:6,padding:"4px 8px",color:"#FAF7F0",fontSize:11,outline:"none",fontFamily:"inherit"}}
-                              placeholder="Model adı..." value={posNewModelName}
-                              onChange={e=>setPosNewModelName(e.target.value)}
-                              onKeyDown={e=>{if(e.key==="Enter")confirmNewModel();if(e.key==="Escape"){setPosNewModelKey(null);setPosNewModelName("");}}}/>
-                            <span style={{background:"#FAF7F0",color:"#8B1A0F",borderRadius:6,padding:"4px 10px",fontSize:11,fontWeight:700,cursor:"pointer"}} onClick={confirmNewModel}>✓</span>
-                            <span style={{background:"rgba(250,247,240,0.1)",color:"#FAD5C8",borderRadius:6,padding:"4px 8px",fontSize:11,cursor:"pointer"}} onClick={()=>{setPosNewModelKey(null);setPosNewModelName("");}}>✕</span>
-                          </div>}
+                          {!isAddingNew
+                            ?<div style={{display:"flex",gap:5,alignItems:"center"}}>
+                              <select style={{flex:1,background:"#5A1A0A",border:"1px solid rgba(250,247,240,0.35)",borderRadius:7,padding:"6px 9px",color:selMid?"#FAF7F0":"#FAD5C8",fontSize:12,outline:"none",fontFamily:"inherit",cursor:"pointer"}}
+                                value={selMid}
+                                onChange={e=>setPosModelLines(v=>({...v,[lineKey]:e.target.value}))}>
+                                <option value="">— seçiniz —</option>
+                                {typeModels.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}
+                              </select>
+                              <span style={{background:"rgba(250,247,240,0.08)",border:"1px dashed rgba(250,247,240,0.4)",borderRadius:6,padding:"5px 9px",fontSize:11,color:"#FAD5C8",cursor:"pointer",whiteSpace:"nowrap"}} onClick={()=>{setPosNewModelKey(lineKey);setPosNewModelName("");}}>+ New</span>
+                            </div>
+                            :<div style={{display:"flex",gap:4}}>
+                              <input autoFocus style={{flex:1,background:"#5A1A0A",border:"1px solid rgba(250,247,240,0.5)",borderRadius:6,padding:"6px 9px",color:"#FAF7F0",fontSize:12,outline:"none",fontFamily:"inherit"}}
+                                placeholder="Model adı..." value={posNewModelName}
+                                onChange={e=>setPosNewModelName(e.target.value)}
+                                onKeyDown={e=>{if(e.key==="Enter")confirmNewModel();if(e.key==="Escape"){setPosNewModelKey(null);setPosNewModelName("");}}}/>
+                              <span style={{background:"#FAF7F0",color:"#8B1A0F",borderRadius:6,padding:"6px 11px",fontSize:12,fontWeight:700,cursor:"pointer"}} onClick={confirmNewModel}>✓</span>
+                              <span style={{background:"rgba(250,247,240,0.1)",color:"#FAD5C8",borderRadius:6,padding:"6px 8px",fontSize:12,cursor:"pointer"}} onClick={()=>{setPosNewModelKey(null);setPosNewModelName("");}}>✕</span>
+                            </div>}
                         </div>;
                       })}
                     </div>}
@@ -2511,10 +2518,11 @@ function expCost(exp) {
                     :<div style={{display:"flex",gap:6,marginBottom:7}}>
                       {["1","2","3"].map(k=><input key={k} type="number" style={{...inpSt}} placeholder={`${k} pair £`} value={(ep.bundleTiers||{})[k]||""} onChange={e=>setEditingPT(v=>({...v,pt:{...v.pt,bundleTiers:{...(v.pt.bundleTiers||{}), [k]:e.target.value}}}))}/>)}
                     </div>}
-                  <input style={{...inpSt,marginBottom:8}} placeholder="Unit label (pair, item…)" value={ep.unit||""} onChange={e=>setEditingPT(v=>({...v,pt:{...v.pt,unit:e.target.value}}))}/>
+                  <input style={{...inpSt,marginBottom:7}} placeholder="Unit label (pair, item…)" value={ep.unit||""} onChange={e=>setEditingPT(v=>({...v,pt:{...v.pt,unit:e.target.value}}))}/>
+                  <input type="number" style={{...inpSt,marginBottom:8}} placeholder="Default model cost £ (e.g. 1)" value={ep.defaultModelCost||""} onChange={e=>setEditingPT(v=>({...v,pt:{...v.pt,defaultModelCost:e.target.value}}))}/>
                   <div style={{display:"flex",gap:6}}>
                     <button style={{flex:1,background:"transparent",border:"1px solid #FAF7F0",color:"#FAF7F0",borderRadius:8,padding:"8px",fontSize:12,cursor:"pointer"}} onClick={()=>setEditingPT(null)}>Cancel</button>
-                    <button style={{flex:1,background:"#FAF7F0",color:"#8B1A0F",border:"none",borderRadius:8,padding:"8px",fontSize:12,fontWeight:700,cursor:"pointer"}} onClick={()=>{if(!ep.name) return;updateProductType(selProj.id,ep.id,{name:ep.name,pricing:ep.pricing,unitPrice:Number(ep.unitPrice||0),bundleTiers:ep.pricing==="bundle"?ep.bundleTiers:null,unit:ep.unit||"pair"});setEditingPT(null);}}>Save</button>
+                    <button style={{flex:1,background:"#FAF7F0",color:"#8B1A0F",border:"none",borderRadius:8,padding:"8px",fontSize:12,fontWeight:700,cursor:"pointer"}} onClick={()=>{if(!ep.name) return;updateProductType(selProj.id,ep.id,{name:ep.name,pricing:ep.pricing,unitPrice:Number(ep.unitPrice||0),bundleTiers:ep.pricing==="bundle"?ep.bundleTiers:null,unit:ep.unit||"pair",defaultModelCost:Number(ep.defaultModelCost||0)});setEditingPT(null);}}>Save</button>
                   </div>
                 </div>;
               }
@@ -2540,10 +2548,11 @@ function expCost(exp) {
                   :<div style={{display:"flex",gap:6,marginBottom:7}}>
                     {["1","2","3"].map(k=><input key={k} type="number" style={{...inpSt}} placeholder={k==="1"?"1 pair £":k==="2"?"2 pairs £":"3 pairs £"} value={(ep.bundleTiers||{})[k]||""} onChange={e=>setEditingPT(v=>({...v,pt:{...v.pt,bundleTiers:{...(v.pt.bundleTiers||{}), [k]:e.target.value}}}))}/>)}
                   </div>}
-                <input style={{...inpSt,marginBottom:8}} placeholder="Unit label (pair, item…)" value={ep.unit||""} onChange={e=>setEditingPT(v=>({...v,pt:{...v.pt,unit:e.target.value}}))}/>
+                <input style={{...inpSt,marginBottom:7}} placeholder="Unit label (pair, item…)" value={ep.unit||""} onChange={e=>setEditingPT(v=>({...v,pt:{...v.pt,unit:e.target.value}}))}/>
+                <input type="number" style={{...inpSt,marginBottom:8}} placeholder="Default model cost £ (e.g. 1)" value={ep.defaultModelCost||""} onChange={e=>setEditingPT(v=>({...v,pt:{...v.pt,defaultModelCost:e.target.value}}))}/>
                 <div style={{display:"flex",gap:6}}>
                   <button style={{flex:1,background:"transparent",border:"1px solid #FAF7F0",color:"#FAF7F0",borderRadius:8,padding:"8px",fontSize:12,cursor:"pointer"}} onClick={()=>setEditingPT(null)}>Cancel</button>
-                  <button style={{flex:1,background:"#FAF7F0",color:"#8B1A0F",border:"none",borderRadius:8,padding:"8px",fontSize:12,fontWeight:700,cursor:"pointer"}} onClick={()=>{if(!ep.name) return;addProductType(selProj.id,{name:ep.name,pricing:ep.pricing,unitPrice:Number(ep.unitPrice||0),bundleTiers:ep.pricing==="bundle"?ep.bundleTiers:null,unit:ep.unit||"pair"});setEditingPT(null);}}>Add Type</button>
+                  <button style={{flex:1,background:"#FAF7F0",color:"#8B1A0F",border:"none",borderRadius:8,padding:"8px",fontSize:12,fontWeight:700,cursor:"pointer"}} onClick={()=>{if(!ep.name) return;addProductType(selProj.id,{name:ep.name,pricing:ep.pricing,unitPrice:Number(ep.unitPrice||0),bundleTiers:ep.pricing==="bundle"?ep.bundleTiers:null,unit:ep.unit||"pair",defaultModelCost:Number(ep.defaultModelCost||0)});setEditingPT(null);}}>Add Type</button>
                 </div>
               </div>;
             })()}
@@ -2554,7 +2563,7 @@ function expCost(exp) {
               <span style={{color:"#FAF7F0",fontSize:13,fontWeight:600,opacity:0.7,textTransform:"uppercase",letterSpacing:1,flex:1}}>Models</span>
               <button style={btnSm} onClick={downloadModelsTemplate}>↓ Template</button>
               <button style={btnSm} onClick={()=>importModelsRef.current&&importModelsRef.current.click()}>↑ Import</button>
-              <button style={{...btnSm,fontSize:12,padding:"4px 10px"}} onClick={()=>setEditingModel({pid:selProj.id,isNew:true,m:{name:"",cost:0,product_type_id:pts.length===1?pts[0].id:"",active:true}})}>+ Add Model</button>
+              <button style={{...btnSm,fontSize:12,padding:"4px 10px"}} onClick={()=>{const defaultPt=pts.length===1?pts[0]:null;setEditingModel({pid:selProj.id,isNew:true,m:{name:"",cost:defaultPt?Number(defaultPt.defaultModelCost||0):0,product_type_id:defaultPt?defaultPt.id:"",active:true}});}}>+ Add Model</button>
             </div>
             {pts.length>0&&<div style={{display:"flex",gap:5,flexWrap:"wrap",marginBottom:9}}>
               <div style={{fontSize:11,padding:"3px 9px",borderRadius:20,cursor:"pointer",border:"1px solid rgba(250,247,240,0.4)",background:!modelFilterType?"#FAF7F0":"transparent",color:!modelFilterType?"#8B1A0F":"#FAF7F0"}} onClick={()=>setModelFilterType(null)}>All</div>
@@ -2591,8 +2600,9 @@ function expCost(exp) {
               const em=editingModel.m;
               return <div style={{background:"rgba(0,0,0,0.2)",borderRadius:10,padding:11,marginBottom:7}}>
                 <input style={{...inpSt,marginBottom:7}} placeholder="Model name (e.g. fuck off)" value={em.name} onChange={e=>setEditingModel(v=>({...v,m:{...v.m,name:e.target.value}}))}/>
-                <input type="number" style={{...inpSt,marginBottom:7}} placeholder="Cost per unit (£)" value={em.cost||""} onChange={e=>setEditingModel(v=>({...v,m:{...v.m,cost:e.target.value}}))}/>
-                <select style={{...inpSt,marginBottom:8}} value={em.product_type_id||""} onChange={e=>setEditingModel(v=>({...v,m:{...v.m,product_type_id:e.target.value}}))}><option value="">No type</option>{pts.map(pt=><option key={pt.id} value={pt.id}>{pt.name}</option>)}</select>
+                <select style={{...inpSt,marginBottom:7}} value={em.product_type_id||""} onChange={e=>{const pt=pts.find(p=>p.id===e.target.value);setEditingModel(v=>({...v,m:{...v.m,product_type_id:e.target.value,cost:pt?Number(pt.defaultModelCost||0):v.m.cost}}));}}><option value="">No type</option>{pts.map(pt=><option key={pt.id} value={pt.id}>{pt.name}</option>)}</select>
+                <input type="number" style={{...inpSt,marginBottom:8}} placeholder="Cost per unit (£)" value={em.cost||""} onChange={e=>setEditingModel(v=>({...v,m:{...v.m,cost:e.target.value}}))}/>
+
                 <div style={{display:"flex",gap:6}}>
                   <button style={{flex:1,background:"transparent",border:"1px solid #FAF7F0",color:"#FAF7F0",borderRadius:8,padding:"8px",fontSize:12,cursor:"pointer"}} onClick={()=>setEditingModel(null)}>Cancel</button>
                   <button style={{flex:1,background:"#FAF7F0",color:"#8B1A0F",border:"none",borderRadius:8,padding:"8px",fontSize:12,fontWeight:700,cursor:"pointer"}} onClick={()=>{if(!em.name) return;addModel(selProj.id,{name:em.name,cost:Number(em.cost||0),product_type_id:em.product_type_id||null,active:true});setEditingModel(null);}}>Add Model</button>
