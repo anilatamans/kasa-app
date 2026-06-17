@@ -1004,7 +1004,11 @@ function EditEntryModal({entry, onSave, onClose, availGoals=[], currentGoalId=nu
     if(!parsedCart) return {};
     const map={};
     parsedCart.forEach(ci=>{
-      (ci.models||[]).forEach((m,mi)=>{ if(m&&m.id) map[ci.typeId+'_'+mi]=m.id; });
+      // cart_items stores modelId (not id) — support both
+      (ci.models||[]).forEach((m,mi)=>{
+        const mid=m&&(m.modelId||m.id);
+        if(mid) map[ci.typeId+'_'+mi]=mid;
+      });
     });
     return map;
   },[parsedCart]);
@@ -2596,19 +2600,23 @@ function expCost(exp) {
           salesEntries.forEach(en=>{
             let cart;
             try{cart=typeof en.cart_items==="string"?JSON.parse(en.cart_items):en.cart_items;}catch(_){return;}
-            if(!cart) return;
+            if(!Array.isArray(cart)||!cart.length) return;
             cart.forEach(ci=>{
-              let cost=0;
+              let entryCost=0;
               (ci.models||[]).forEach(m=>{
                 if(!m) return;
-                const fm=allMods.find(x=>x.id===m.id);
-                cost+=fm?Number(fm.cost||0):0;
+                // cost stored directly in cart_items (saved at sale time)
+                if(Number(m.cost||0)>0){entryCost+=Number(m.cost);return;}
+                // fallback: look up live cost from models table (supports modelId or id)
+                const mid=m.modelId||m.id;
+                const fm=mid?allMods.find(x=>x.id===mid):null;
+                entryCost+=fm?Number(fm.cost||0):0;
               });
-              if(cost===0) return;
+              if(entryCost===0) return;
               const key=en.date+'___'+ci.typeName;
               if(!cogsMap[key]) cogsMap[key]={date:en.date,typeName:ci.typeName,qty:0,totalCost:0};
               cogsMap[key].qty+=ci.qty;
-              cogsMap[key].totalCost+=cost;
+              cogsMap[key].totalCost+=entryCost;
             });
           });
           const cogsRows=Object.values(cogsMap).sort((a,b)=>a.date.localeCompare(b.date)||a.typeName.localeCompare(b.typeName));
