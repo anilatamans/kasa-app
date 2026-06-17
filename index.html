@@ -1530,6 +1530,40 @@ function App() {
       return s+Number(x.amount);
     },0);
   }
+// Collect all entries (with cart_items) from a goal tree recursively
+function collectEntriesWithCart(goals){
+  const r=[];
+  (goals||[]).forEach(g=>{
+    (g.entries||[]).forEach(en=>{if(en.cart_items)r.push(en);});
+    collectEntriesWithCart(g.subGoals||[]).forEach(x=>r.push(x));
+  });
+  return r;
+}
+// Build COGS rows from entries + live models list
+function calcCOGS(entries, liveModels){
+  const map={};
+  (entries||[]).forEach(en=>{
+    let cart;
+    try{cart=typeof en.cart_items==="string"?JSON.parse(en.cart_items):en.cart_items;}catch(_){return;}
+    if(!Array.isArray(cart)||!cart.length) return;
+    cart.forEach(ci=>{
+      let cost=0;
+      (ci.models||[]).forEach(m=>{
+        if(!m) return;
+        if(Number(m.cost||0)>0){cost+=Number(m.cost);return;}
+        const mid=m.modelId||m.id;
+        const fm=mid?(liveModels||[]).find(x=>x.id===mid):null;
+        cost+=fm?Number(fm.cost||0):0;
+      });
+      if(cost===0) return;
+      const key=en.date+'___'+ci.typeName;
+      if(!map[key]) map[key]={date:en.date,typeName:ci.typeName,qty:0,totalCost:0};
+      map[key].qty+=ci.qty;
+      map[key].totalCost+=cost;
+    });
+  });
+  return Object.values(map).sort((a,b)=>a.date.localeCompare(b.date)||a.typeName.localeCompare(b.typeName));
+}
 function expCost(exp) {
   const start=new Date((exp.startDate||today())+"T00:00:00");
   const now=new Date();now.setHours(0,0,0,0);
@@ -2585,41 +2619,9 @@ function expCost(exp) {
               <button style={{background:"none",border:"none",color:"#FAF7F0",fontSize:17,cursor:"pointer",padding:"0 2px"}} onClick={onDel}>×</button>
             </div>
           );
-          // ── COGS: collect model costs from sales entries ──
-          function collectGoalEntries(goals){
-            const r=[];
-            (goals||[]).forEach(g=>{
-              (g.entries||[]).forEach(en=>{if(en.cart_items)r.push(en);});
-              collectGoalEntries(g.subGoals||[]).forEach(x=>r.push(x));
-            });
-            return r;
-          }
-          const salesEntries=collectGoalEntries(selProj.goals||[]);
-          const allMods=selProj.models||[];
-          const cogsMap={};
-          salesEntries.forEach(en=>{
-            let cart;
-            try{cart=typeof en.cart_items==="string"?JSON.parse(en.cart_items):en.cart_items;}catch(_){return;}
-            if(!Array.isArray(cart)||!cart.length) return;
-            cart.forEach(ci=>{
-              let entryCost=0;
-              (ci.models||[]).forEach(m=>{
-                if(!m) return;
-                // cost stored directly in cart_items (saved at sale time)
-                if(Number(m.cost||0)>0){entryCost+=Number(m.cost);return;}
-                // fallback: look up live cost from models table (supports modelId or id)
-                const mid=m.modelId||m.id;
-                const fm=mid?allMods.find(x=>x.id===mid):null;
-                entryCost+=fm?Number(fm.cost||0):0;
-              });
-              if(entryCost===0) return;
-              const key=en.date+'___'+ci.typeName;
-              if(!cogsMap[key]) cogsMap[key]={date:en.date,typeName:ci.typeName,qty:0,totalCost:0};
-              cogsMap[key].qty+=ci.qty;
-              cogsMap[key].totalCost+=entryCost;
-            });
-          });
-          const cogsRows=Object.values(cogsMap).sort((a,b)=>a.date.localeCompare(b.date)||a.typeName.localeCompare(b.typeName));
+          // ── COGS: all entries with cart_items across all goals ──
+          const projSalesEntries=collectEntriesWithCart(selProj.goals||[]);
+          const cogsRows=calcCOGS(projSalesEntries, selProj.models||[]);
           const cogsTotal=cogsRows.reduce((s,r)=>s+r.totalCost,0);
 
           return <>
@@ -2825,7 +2827,15 @@ function expCost(exp) {
           </>}
         </div>
         <Tabs tabs={["entries","expenses","insights","recurring"]} active={goalTab} color={c} onChange={setGoalTab}/>
-        {goalTab==="expenses"&&<>
+        {goalTab==="expenses"&&(()=>{
+          // COGS for this goal + sub-goals
+          const goalEntriesForCOGS=[
+            ...(selGoal.entries||[]).filter(en=>en.cart_items),
+            ...collectEntriesWithCart(selGoal.subGoals||[])
+          ];
+          const goalCogsRows=calcCOGS(goalEntriesForCOGS, selProj?selProj.models||[]:[]);
+          const goalCogsTotal=goalCogsRows.reduce((s,r)=>s+r.totalCost,0);
+          return <>
           <button style={{...S.btn,marginBottom:11}} onClick={()=>{setXForm(EX());setView("newGoalExpense");}}>+ Add Expense</button>
           {(selGoal.expenses||[]).length>0&&<>
             {(selGoal.expenses||[]).map(x=>(
@@ -2841,11 +2851,35 @@ function expCost(exp) {
               </div>
             ))}
             <div style={{padding:"9px 11px",background:"#721408",borderRadius:8,display:"flex",justifyContent:"space-between",marginBottom:8}}>
-              <span style={{fontSize:13,color:"#FAF7F0"}}>Total</span>
+              <span style={{fontSize:13,color:"#FAF7F0"}}>Total Expenses</span>
               <span style={{fontSize:14,fontWeight:700,color:"#F87171"}}>{fmtGBP(goalExpTotal(selGoal))}</span>
             </div>
           </>}
           {(selGoal.expenses||[]).length===0&&<div style={{color:"#FAD5C8",fontSize:13,textAlign:"center",padding:"16px 0"}}>No expenses yet</div>}
+          {goalCogsRows.length>0&&<>
+            <div style={{fontSize:10,letterSpacing:2,color:"#FAD5C8",textTransform:"uppercase",marginTop:14,marginBottom:7}}>Cost of Goods Sold</div>
+            {goalCogsRows.map(r=>(
+              <div key={r.date+'_'+r.typeName} style={{display:"flex",alignItems:"center",gap:6,background:"rgba(113,20,8,0.6)",padding:"9px 11px",borderRadius:8,marginBottom:4}}>
+                <div style={{minWidth:50,flexShrink:0}}>
+                  <div style={{fontSize:11,color:"#FAF7F0",fontWeight:500}}>{new Date(r.date+"T00:00:00").toLocaleDateString("en-GB",{day:"2-digit",month:"short"})}</div>
+                  <div style={{fontSize:10,color:"#FAD5C8"}}>COGS</div>
+                </div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:13,fontWeight:600,color:"#FAF7F0",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.typeName}</div>
+                  <div style={{fontSize:10,color:"rgba(250,247,240,0.5)",marginTop:1}}>{r.qty} pair{r.qty!==1?"s":""}</div>
+                </div>
+                <div style={{fontSize:13,fontWeight:700,color:"#F87171",flexShrink:0}}>{fmtGBP(r.totalCost)}</div>
+              </div>
+            ))}
+            <div style={{padding:"9px 11px",background:"#5A1A0A",borderRadius:8,display:"flex",justifyContent:"space-between",marginBottom:6}}>
+              <span style={{fontSize:13,color:"#FAF7F0"}}>Total COGS</span>
+              <span style={{fontSize:14,fontWeight:700,color:"#F87171"}}>{fmtGBP(goalCogsTotal)}</span>
+            </div>
+            {(selGoal.expenses||[]).length>0&&<div style={{padding:"9px 11px",background:"#A02218",borderRadius:8,display:"flex",justifyContent:"space-between"}}>
+              <span style={{fontSize:13,fontWeight:600,color:"#FAF7F0"}}>Grand Total</span>
+              <span style={{fontSize:14,fontWeight:700,color:"#F87171"}}>{fmtGBP(goalExpTotal(selGoal)+goalCogsTotal)}</span>
+            </div>}
+          </>}
           {sel.pid&&(()=>{
             const proj=db.projects.find(p=>p.id===sel.pid);
             const projExps=(proj&&proj.expenses||[]).filter(e=>!e.goalId&&!e.goal_id);
@@ -2869,7 +2903,8 @@ function expCost(exp) {
               ))}
             </div>;
           })()}
-        </>}
+          </>;
+        })()}
         {goalTab==="entries"&&<GoalEntriesView entries={selGoal.entries||[]} sel={sel} products={(selProj&&selProj.products)||[]} setMod={setMod} delEntry={delEntry}/>}
         {goalTab==="insights"&&<GoalInsights goal={selGoal} color={c} showProj={sel&&!!sel.pid} projData={sel&&sel.pid?db.projects.find(p=>p.id===sel.pid):null}/>}
         {goalTab==="recurring"&&(()=>{
