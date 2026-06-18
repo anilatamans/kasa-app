@@ -634,7 +634,7 @@ const S = {
   tab:(active,color)=>({flex:1,textAlign:"center",padding:"8px 0",fontSize:12,color:active?"#FAF7F0":"#FAD5C8",cursor:"pointer",letterSpacing:1,textTransform:"uppercase",borderBottom:`2px solid ${active?(color||"#FAF7F0"):"transparent"}`,transition:"all 0.2s"}),
   entryRow:{display:"flex",alignItems:"center",gap:7,background:"#A02218",padding:"9px 8px",borderRadius:8,marginBottom:2},
   fab:{position:"fixed",bottom:24,left:"50%",transform:"translateX(-50%)",background:"#FAF7F0",color:"#8B1A0F",border:"none",borderRadius:24,padding:"14px 48px",fontSize:14,fontWeight:700,cursor:"pointer",zIndex:50,whiteSpace:"nowrap",boxShadow:"0 4px 16px rgba(0,0,0,0.4)"},
-  toast:{position:"fixed",top:56,left:"50%",transform:"translateX(-50%)",background:"#FAF7F0",color:"#C0392B",padding:"7px 14px",borderRadius:8,fontWeight:700,fontSize:13,zIndex:200,whiteSpace:"nowrap"},
+  toast:{position:"fixed",top:56,left:"50%",transform:"translateX(-50%)",background:"#FAF7F0",color:"#C0392B",padding:"7px 14px",borderRadius:8,fontWeight:700,fontSize:13,zIndex:9999,whiteSpace:"nowrap"},
   overlay:{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:16},
   modal:{background:"#A02218",border:"1px solid #243650",borderRadius:16,padding:20,width:"100%",maxWidth:360,maxHeight:"90vh",overflowY:"auto",color:"#FAF7F0"},
 };
@@ -957,12 +957,12 @@ function GoalInsights({goal, color, showProj=false, projData=null}) {
 
 
 // ── MODALS ──
-function ConfirmModal({text, onConfirm, onClose, confirmLabel="Delete", title="Emin misin? / Confirm"}) {
+function ConfirmModal({text, onConfirm, onClose, confirmLabel="Delete", title="Confirm"}) {
   return <div style={S.overlay}><div style={S.modal}>
     <div style={{fontSize:17,fontWeight:700,marginBottom:10}}>{title}</div>
     <div style={{fontSize:14,color:"#FAF7F0",marginBottom:18,lineHeight:1.6}}>{text}</div>
     <div style={{display:"flex",gap:8}}>
-      <button style={S.btnGhost} onClick={onClose}>İptal / Cancel</button>
+      <button style={S.btnGhost} onClick={onClose}>Cancel</button>
       <button style={{...S.btn,background:"#8B1A0F",color:"#fff"}} onClick={onConfirm}>{confirmLabel}</button>
     </div>
   </div></div>;
@@ -1086,7 +1086,7 @@ function EditEntryModal({entry, onSave, onClose, availGoals=[], currentGoalId=nu
               const nm=newModelName.trim();
               if(!nm){setNewModelKey(null);setNewModelName("");return;}
               const dup=(allModels.filter(m=>m.product_type_id===ci.typeId)).some(m=>m.name.trim().toLowerCase()===nm.toLowerCase());
-              if(dup){alert("Bu isimde model zaten var / Model already exists");return;}
+              if(dup){alert("Model already exists");return;}
               const newId=gid();
               const defCost=Number((allProductTypes.find(p=>p.id===ci.typeId)||{}).defaultModelCost||0);
               if(onAddModel) onAddModel(ci.typeId,{id:newId,name:nm,cost:defCost,product_type_id:ci.typeId,active:true});
@@ -1098,7 +1098,7 @@ function EditEntryModal({entry, onSave, onClose, availGoals=[], currentGoalId=nu
               {isAddingNew
                 ?<div style={{display:"flex",gap:5,alignItems:"center"}}>
                   <input autoFocus style={{flex:1,background:"#5A1A0A",border:"1px solid rgba(250,247,240,0.5)",borderRadius:7,padding:"5px 8px",color:"#FAF7F0",fontSize:12,outline:"none",fontFamily:"inherit"}}
-                    placeholder="Model adı..." value={newModelName} onChange={ev=>setNewModelName(ev.target.value)}
+                    placeholder="Model name..." value={newModelName} onChange={ev=>setNewModelName(ev.target.value)}
                     onKeyDown={ev=>{if(ev.key==="Enter")confirmNew();if(ev.key==="Escape"){setNewModelKey(null);setNewModelName("");}}}/>
                   <span style={{background:"#5A1A0A",border:"1px solid rgba(250,247,240,0.3)",borderRadius:6,padding:"4px 8px",fontSize:12,color:"#FAD5C8",cursor:"pointer"}} onClick={confirmNew}>✓</span>
                   <span style={{background:"rgba(250,247,240,0.1)",border:"1px solid rgba(250,247,240,0.2)",borderRadius:6,padding:"4px 8px",fontSize:12,color:"#FAD5C8",cursor:"pointer"}} onClick={()=>{setNewModelKey(null);setNewModelName("");}}>✕</span>
@@ -1106,7 +1106,7 @@ function EditEntryModal({entry, onSave, onClose, availGoals=[], currentGoalId=nu
                 :<div style={{display:"flex",gap:5,alignItems:"center"}}>
                   <select style={{flex:1,background:"#5A1A0A",border:"1px solid rgba(250,247,240,0.35)",borderRadius:7,padding:"5px 8px",color:selMid?"#FAF7F0":"#FAD5C8",fontSize:12,outline:"none",fontFamily:"inherit"}}
                     value={selMid} onChange={ev=>setEditModels(v=>({...v,[lineKey]:ev.target.value}))}>
-                    <option value="">— select / seçiniz —</option>
+                    <option value="">— select —</option>
                     {typeModels.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}
                   </select>
                   {selMid&&<span style={{background:"rgba(250,247,240,0.12)",border:"1px solid rgba(250,247,240,0.3)",borderRadius:6,padding:"4px 8px",fontSize:13,color:"#FAD5C8",cursor:"pointer"}} onClick={()=>setEditModels(v=>{const n={...v};delete n[lineKey];return n;})}>×</span>}
@@ -1123,9 +1123,9 @@ function EditEntryModal({entry, onSave, onClose, availGoals=[], currentGoalId=nu
     {!parsedCart&&allProductTypes.length>0&&<div style={{marginBottom:14}}>
       <label style={{display:"block",fontSize:11,letterSpacing:1.5,color:"#FAF7F0",textTransform:"uppercase",marginBottom:8,fontWeight:600}}>Models / Modeller</label>
       <div style={{marginBottom:8}}>
-        <div style={{fontSize:10,color:"#FAD5C8",marginBottom:4}}>Ürün tipi / Product type</div>
+        <div style={{fontSize:10,color:"#FAD5C8",marginBottom:4}}>Product type</div>
         <select style={selSt} value={manualTypeId} onChange={ev=>{setManualTypeId(ev.target.value);setManualModels({});}}>
-          <option value="">— select / seçiniz —</option>
+          <option value="">— select —</option>
           {allProductTypes.map(pt=><option key={pt.id} value={pt.id}>{pt.name}</option>)}
         </select>
       </div>
@@ -1140,7 +1140,7 @@ function EditEntryModal({entry, onSave, onClose, availGoals=[], currentGoalId=nu
             const nm=newModelName.trim();
             if(!nm){setNewModelKey(null);setNewModelName("");return;}
             const dup=tModels.some(m=>m.name.trim().toLowerCase()===nm.toLowerCase());
-            if(dup){alert("Bu isimde model zaten var / Model already exists");return;}
+            if(dup){alert("Model already exists");return;}
             const newId=gid();
             const defCost=Number((allProductTypes.find(p=>p.id===manualTypeId)||{}).defaultModelCost||0);
             if(onAddModel) onAddModel(manualTypeId,{id:newId,name:nm,cost:defCost,product_type_id:manualTypeId,active:true});
@@ -1152,7 +1152,7 @@ function EditEntryModal({entry, onSave, onClose, availGoals=[], currentGoalId=nu
             {isAddingNew
               ?<div style={{display:"flex",gap:5,alignItems:"center"}}>
                 <input autoFocus style={{flex:1,background:"#5A1A0A",border:"1px solid rgba(250,247,240,0.5)",borderRadius:7,padding:"5px 8px",color:"#FAF7F0",fontSize:12,outline:"none",fontFamily:"inherit"}}
-                  placeholder="Model adı..." value={newModelName} onChange={ev=>setNewModelName(ev.target.value)}
+                  placeholder="Model name..." value={newModelName} onChange={ev=>setNewModelName(ev.target.value)}
                   onKeyDown={ev=>{if(ev.key==="Enter")confirmNewManual();if(ev.key==="Escape"){setNewModelKey(null);setNewModelName("");}}}/>
                 <span style={{background:"#5A1A0A",border:"1px solid rgba(250,247,240,0.3)",borderRadius:6,padding:"4px 8px",fontSize:12,color:"#FAD5C8",cursor:"pointer"}} onClick={confirmNewManual}>✓</span>
                 <span style={{background:"rgba(250,247,240,0.1)",border:"1px solid rgba(250,247,240,0.2)",borderRadius:6,padding:"4px 8px",fontSize:12,color:"#FAD5C8",cursor:"pointer"}} onClick={()=>{setNewModelKey(null);setNewModelName("");}}>✕</span>
@@ -1160,7 +1160,7 @@ function EditEntryModal({entry, onSave, onClose, availGoals=[], currentGoalId=nu
               :<div style={{display:"flex",gap:5,alignItems:"center"}}>
                 <select style={{...selSt,padding:"6px 9px",fontSize:12,background:"#5A1A0A"}}
                   value={selMid} onChange={ev=>setManualModels(v=>({...v,[mi]:ev.target.value}))}>
-                  <option value="">— select / seçiniz —</option>
+                  <option value="">— select —</option>
                   {tModels.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}
                 </select>
                 {selMid&&<span style={{background:"rgba(250,247,240,0.12)",border:"1px solid rgba(250,247,240,0.3)",borderRadius:6,padding:"4px 8px",fontSize:13,color:"#FAD5C8",cursor:"pointer"}} onClick={()=>setManualModels(v=>{const n={...v};delete n[mi];return n;})}>×</span>}
@@ -1336,8 +1336,8 @@ function GoalEntriesView({entries, sel, products, setMod, delEntry}) {
   function handleEdit(e){setMod(function(m){return {...m,editEntry:{entry:e,gid_:sel.gid_,pid:sel.pid}};});}
   function handleDel(eid, label){
     setMod(m=>({...m,confirm:{
-      text:`"${label||'Bu girdi'}" silinsin mi? Bu işlem geri alınamaz.`,
-      confirmLabel:"Sil / Delete",
+      text:`Delete "${label||'this entry'}"? This cannot be undone.`,
+      confirmLabel:"Delete",
       fn:()=>{delEntry(eid,sel.gid_,sel.pid);setMod(m2=>({...m2,confirm:null}));}
     }}));
   }
@@ -1426,6 +1426,7 @@ function App() {
   const [importRef] = useState(()=>({current:null}));
   const [importTypesRef] = useState(()=>({current:null}));
   const [importModelsRef] = useState(()=>({current:null}));
+  const [importSalesRef] = useState(()=>({current:null}));
   const [viewProduct, setViewProduct] = useState(null); // {productId, pid}
   const [editingPT, setEditingPT] = useState(null); // {pid, pt:{...}, isNew:bool}
   const [editingModel, setEditingModel] = useState(null); // {pid, m:{...}, isNew:bool}
@@ -1445,8 +1446,12 @@ function App() {
   // Restore scroll position after cart state changes (prevents jump on + click)
   React.useLayoutEffect(()=>{
     if(posScrollSave.current!==null && posBodyRef.current){
-      posBodyRef.current.scrollTop=posScrollSave.current;
+      const saved=posScrollSave.current;
+      posBodyRef.current.scrollTop=saved;
       posScrollSave.current=null;
+      // Also apply after browser auto-scrolls new elements into view
+      setTimeout(()=>{if(posBodyRef.current)posBodyRef.current.scrollTop=saved;},0);
+      setTimeout(()=>{if(posBodyRef.current)posBodyRef.current.scrollTop=saved;},50);
     }
   },[cart]);
 
@@ -2000,6 +2005,94 @@ function expCost(exp) {
     };
     reader.readAsText(file);
   }
+  function downloadSalesTemplate(pid) {
+    const proj=db.projects.find(p=>p.id===pid);
+    const pts=(proj&&proj.productTypes)||[];
+    const ptName=pts.length>0?pts[0].name:"Standard Socks";
+    const mods=(proj&&proj.models)||[];
+    const typeMods=mods.filter(m=>pts.length>0&&m.product_type_id===pts[0].id);
+    const m1=typeMods[0]?typeMods[0].name:"Model A";
+    const m2=typeMods[1]?typeMods[1].name:"Model B";
+    const csv=[
+      "date,amount,source,note,units,product_type,goal,model_1,model_2,model_3,model_4,model_5,model_6",
+      `${today()},28,Cash,4x ${ptName},4,${ptName},,${m1},${m2},${m1},${m2}`,
+      `${today()},20,Square,2x ${ptName},2,${ptName},,${m1},${m2}`
+    ].join("\n");
+    const a=document.createElement("a");
+    a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));
+    a.download="kasa_sales_template.csv"; a.click();
+  }
+  function importSalesCSV(file, pid, defaultGoalId) {
+    const uid=getUserId();
+    if(!file||!pid||!uid) return;
+    const proj=db.projects.find(p=>p.id===pid);
+    const pts=(proj&&proj.productTypes)||[];
+    const allMods=(proj&&proj.models)||[];
+    const goals=(proj&&proj.goals)||[];
+    const reader=new FileReader();
+    reader.onload=e=>{
+      const lines=e.target.result.split("\n").filter(l=>l.trim());
+      if(lines.length<2){toast_("CSV empty");return;}
+      const header=lines[0].split(",").map(h=>h.trim().toLowerCase());
+      const col=k=>header.indexOf(k);
+      let added=0;
+      lines.slice(1).forEach(line=>{
+        // Parse CSV line respecting quoted fields
+        const c=[];let cur="",inQ=false;
+        for(const ch of line){if(ch==='"'){inQ=!inQ;}else if(ch===','&&!inQ){c.push(cur.trim());cur="";}else{cur+=ch;}}
+        c.push(cur.trim());
+        const g=i=>i>=0?(c[i]||"").replace(/^"|"$/g,"").trim():"";
+        const date=g(col("date"))||today();
+        const amount=parseFloat(g(col("amount"))||"0");
+        if(!amount) return;
+        const source=g(col("source"))||"Cash";
+        const note=g(col("note"))||"";
+        const units=parseInt(g(col("units"))||"1")||1;
+        const ptName=g(col("product_type"));
+        const goalName=g(col("goal"));
+        // Find product type by name
+        const pt=ptName?pts.find(p=>p.name.toLowerCase()===ptName.toLowerCase()):null;
+        // Find goal by name
+        let gid_=defaultGoalId||null;
+        if(goalName){
+          const foundGoal=goals.find(g=>g.name.toLowerCase()===goalName.toLowerCase());
+          if(foundGoal) gid_=foundGoal.id;
+        }
+        // Build models array from model_1..model_N columns
+        const modelCols=header.map((h,i)=>h.startsWith("model_")?i:-1).filter(i=>i>=0);
+        const models=modelCols.slice(0,units).map(i=>{
+          const mname=g(i);
+          if(!mname) return null;
+          const m=allMods.find(x=>x.name.toLowerCase()===mname.toLowerCase()&&(!pt||x.product_type_id===pt.id));
+          return m?{modelId:m.id,name:m.name,cost:Number(m.cost||0)}:null;
+        });
+        // Fill remaining pairs with null
+        while(models.length<units) models.push(null);
+        const lineTotal=pt?calcTypePrice({pricing:pt.pricing,unitPrice:pt.unitPrice,bundleTiers:pt.bundleTiers},units):amount;
+        const cartItemsData=pt?[{typeId:pt.id,typeName:pt.name,qty:units,lineTotal,models}]:[];
+        const modelLabels=models.filter(Boolean).map(m=>m.name);
+        const finalNote=note||(pt?`${units}x ${pt.name}`:"")||"";
+        const finalNoteWithModels=modelLabels.length?finalNote+" · "+modelLabels.join(", "):finalNote;
+        const entry={id:gid(),amount,note:finalNoteWithModels,source,date,ts:Date.now(),units,productId:null,cart_items:cartItemsData.length?JSON.stringify(cartItemsData):null};
+        if(gid_){
+          updGoal(gid_,g=>({...g,entries:[...(g.entries||[]),entry].sort((a,b)=>b.date.localeCompare(a.date))}),pid);
+        } else {
+          setDb(d=>({...d,projects:d.projects.map(p=>{
+            if(p.id!==pid) return p;
+            let gen=(p.goals||[]).find(g=>g._general);
+            if(!gen) gen={id:gid(),name:"General",_general:true,target:0,category:"other",period:"monthly",entries:[],subGoals:[],createdAt:Date.now(),createdStr:today(),archived:false};
+            const rest=(p.goals||[]).filter(g=>!g._general);
+            return {...p,goals:[...rest,{...gen,entries:[...(gen.entries||[]),entry].sort((a,b)=>b.date.localeCompare(a.date))}]};
+          })}));
+        }
+        db_.insert("entries",{id:entry.id,user_id:uid,goal_id:gid_||null,project_id:pid,amount,source,note:finalNoteWithModels,date,units,cart_items:entry.cart_items||null}).catch(console.error);
+        added++;
+      });
+      if(added) toast_(`${added} sales imported ✦`);
+      else toast_("No valid rows found in CSV");
+    };
+    reader.readAsText(file);
+  }
   function saveEditProduct(pid, prod) {
     setDb(d=>({...d,projects:d.projects.map(p=>p.id===pid?{...p,products:(p.products||[]).map(pr=>pr.id===prod.id?{...prod,unitCost:parseFloat(prod.unitCost)}:pr)}:p)}));
     db_.update('products',prod.id,{name:prod.name,unit_cost:parseFloat(prod.unitCost),unit:prod.unit||'pair',is_premium:prod.isPremium||false}).catch(console.error);
@@ -2231,7 +2324,7 @@ function expCost(exp) {
         if(pid){const p=db.projects.find(pr=>pr.id===pid);return (p&&p.goals||[]).filter(g=>!g.archived);}
         return db.goals.filter(g=>!g.archived);
       })()}
-      onMove={(toGoalId,toGoalName)=>{setMod(m=>({...m,editEntry:null,confirm:{title:"Taşınsın mı? / Confirm Move",text:`Bu girdi "${toGoalName}" hedefine taşınsın mı?`,confirmLabel:"Taşı / Move",fn:()=>{moveEntry(mod.editEntry.entry,mod.editEntry.gid_,toGoalId,mod.editEntry.pid);setMod(m2=>({...m2,confirm:null}));}}}));}}
+      onMove={(toGoalId,toGoalName)=>{setMod(m=>({...m,editEntry:null,confirm:{title:"Confirm Move",text:`Move this entry to "${toGoalName}"?`,confirmLabel:"Move",fn:()=>{moveEntry(mod.editEntry.entry,mod.editEntry.gid_,toGoalId,mod.editEntry.pid);setMod(m2=>({...m2,confirm:null}));}}}));}}
       onClose={()=>setMod(m=>({...m,editEntry:null}))} onSave={updated=>{updGoal(mod.editEntry.gid_,g=>({...g,entries:(g.entries||[]).map(e=>e.id===updated.id?updated:e).sort((a,b)=>b.date.localeCompare(a.date))}),mod.editEntry.pid);db_.update('entries',updated.id,{amount:updated.amount,note:updated.note||null,date:updated.date,source:updated.source,units:updated.units||0,cart_items:updated.cart_items||null}).catch(console.error);setMod(m=>({...m,editEntry:null}));toast_("Updated ✦");}}/>}
     {mod.recur&&<RecurModal initial={mod.recur.data} onClose={()=>setMod(m=>({...m,recur:null}))} onSave={r=>{
       const newRule={...r,id:mod.recur.ruleId||gid(),lastApplied:today()};
@@ -2359,7 +2452,7 @@ function expCost(exp) {
             id:gid(), amount:finalTotal, note:finalNoteStr,
             source:posPayment, date:posDate||today(), ts:Date.now(),
             units:totalUnits, productId:null,
-            cartItems: cartItemsData
+            cart_items: JSON.stringify(cartItemsData)
           };
           const targetGoalId = posGoalId;
           const pid = sel.pid;
@@ -2424,6 +2517,7 @@ function expCost(exp) {
                         <span style={{fontSize:14,fontWeight:700,color:"#FAF7F0",minWidth:20,textAlign:"center"}}>{item.qty}</span>
                         <button style={{background:"rgba(250,247,240,0.2)",border:"none",color:"#FAF7F0",width:28,height:28,borderRadius:6,fontSize:16,cursor:"pointer"}} onMouseDown={e=>e.preventDefault()} onClick={()=>{posScrollSave.current=posBodyRef.current?.scrollTop;addToCart(pts.find(p=>p.id===item.typeId)||item);}}>+</button>
                         <span style={{fontSize:14,fontWeight:700,color:"#FAF7F0",minWidth:40,textAlign:"right"}}>{fmtGBP(linePrice)}</span>
+                        <button style={{background:"none",border:"none",color:"rgba(250,247,240,0.5)",fontSize:16,cursor:"pointer",padding:"0 2px",lineHeight:1}} title="Remove" onMouseDown={e=>e.preventDefault()} onClick={()=>{setCart(c=>c.filter(i=>i.typeId!==item.typeId));setPosModelLines(v=>{const n={...v};Object.keys(n).forEach(k=>{if(k.startsWith(item.typeId+'_'))delete n[k];});return n;});}}>×</button>
                       </div>
                     </div>
                     {item.qty>0&&<div style={{marginBottom:8,marginTop:2}}>
@@ -2436,7 +2530,7 @@ function expCost(exp) {
                           const nm=posNewModelName.trim();
                           if(!nm){setPosNewModelKey(null);setPosNewModelName("");return;}
                           const duplicate=typeModels.some(m=>m.name.trim().toLowerCase()===nm.toLowerCase());
-                          if(duplicate){toast_("⚠ Bu isimde bir model zaten var / Model already exists");return;}
+                          if(duplicate){toast_("⚠ Model already exists");return;}
                           const newId=gid();
                           const defCost=typePt?Number(typePt.defaultModelCost||0):0;
                           addModel(sel.pid,{id:newId,name:nm,cost:defCost,product_type_id:item.typeId,active:true});
@@ -2447,18 +2541,18 @@ function expCost(exp) {
                           <div style={{fontSize:10,color:"#FAD5C8",marginBottom:3}}>{item.unit||"Pair"} {mi+1} model</div>
                           {!isAddingNew
                             ?<div style={{display:"flex",gap:5,alignItems:"center"}}>
-                              <select style={{flex:1,background:"#5A1A0A",border:"1px solid rgba(250,247,240,0.35)",borderRadius:7,padding:"6px 9px",color:selMid?"#FAF7F0":"#FAD5C8",fontSize:12,outline:"none",fontFamily:"inherit",cursor:"pointer"}}
+                              <select tabIndex={-1} style={{flex:1,background:"#5A1A0A",border:"1px solid rgba(250,247,240,0.35)",borderRadius:7,padding:"6px 9px",color:selMid?"#FAF7F0":"#FAD5C8",fontSize:12,outline:"none",fontFamily:"inherit",cursor:"pointer"}}
                                 value={selMid}
                                 onChange={e=>setPosModelLines(v=>({...v,[lineKey]:e.target.value}))}>
-                                <option value="">— select / seçiniz —</option>
+                                <option value="">— select —</option>
                                 {typeModels.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}
                               </select>
-                              {selMid&&<span style={{background:"rgba(250,247,240,0.12)",border:"1px solid rgba(250,247,240,0.3)",borderRadius:6,padding:"5px 8px",fontSize:13,color:"#FAD5C8",cursor:"pointer",lineHeight:1}} title="Seçimi temizle / Clear selection" onClick={()=>setPosModelLines(v=>{const n={...v};delete n[lineKey];return n;})}>×</span>}
+                              {selMid&&<span style={{background:"rgba(250,247,240,0.12)",border:"1px solid rgba(250,247,240,0.3)",borderRadius:6,padding:"5px 8px",fontSize:13,color:"#FAD5C8",cursor:"pointer",lineHeight:1}} title="Clear selection" onClick={()=>setPosModelLines(v=>{const n={...v};delete n[lineKey];return n;})}>×</span>}
                               <span style={{background:"rgba(250,247,240,0.08)",border:"1px dashed rgba(250,247,240,0.4)",borderRadius:6,padding:"5px 9px",fontSize:11,color:"#FAD5C8",cursor:"pointer",whiteSpace:"nowrap"}} onClick={()=>{setPosNewModelKey(lineKey);setPosNewModelName("");}}>+ New</span>
                             </div>
                             :<div style={{display:"flex",gap:4}}>
                               <input autoFocus style={{flex:1,background:"#5A1A0A",border:"1px solid rgba(250,247,240,0.5)",borderRadius:6,padding:"6px 9px",color:"#FAF7F0",fontSize:12,outline:"none",fontFamily:"inherit"}}
-                                placeholder="Model adı..." value={posNewModelName}
+                                placeholder="Model name..." value={posNewModelName}
                                 onChange={e=>setPosNewModelName(e.target.value)}
                                 onKeyDown={e=>{if(e.key==="Enter")confirmNewModel();if(e.key==="Escape"){setPosNewModelKey(null);setPosNewModelName("");}}}/>
                               <span style={{background:"#FAF7F0",color:"#8B1A0F",borderRadius:6,padding:"6px 11px",fontSize:12,fontWeight:700,cursor:"pointer"}} onClick={confirmNewModel}>✓</span>
@@ -2953,7 +3047,7 @@ function expCost(exp) {
                 <div style={{flex:1,fontSize:13,fontWeight:600,color:"#FAF7F0",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{x.name}</div>
                 <div style={{fontSize:13,fontWeight:700,color:"#F87171",flexShrink:0,marginRight:4}}>{fmtGBP(expCost(x))}</div>
                 <button style={{background:"rgba(250,247,240,0.2)",border:"1px solid #FAF7F0",color:"#FAF7F0",borderRadius:5,fontSize:11,cursor:"pointer",padding:"3px 7px",marginRight:2}} onClick={()=>setEditingExp({pid:sel.pid,gid_:sel.gid_,exp:{...x}})}>Edit</button>
-                <button style={{background:"none",border:"none",color:"#FAF7F0",fontSize:17,cursor:"pointer",opacity:0.5}} onClick={()=>setMod(m=>({...m,confirm:{text:`"${x.name}" gideri silinsin mi?`,confirmLabel:"Sil / Delete",fn:()=>{updGoal(sel.gid_,g=>({...g,expenses:(g.expenses||[]).filter(e=>e.id!==x.id)}),sel.pid);db_.delete("expenses",x.id).catch(console.error);toast_("Deleted");setMod(m2=>({...m2,confirm:null}));}}}))}>×</button>
+                <button style={{background:"none",border:"none",color:"#FAF7F0",fontSize:17,cursor:"pointer",opacity:0.5}} onClick={()=>setMod(m=>({...m,confirm:{text:`Delete expense "${x.name}"?`,confirmLabel:"Delete",fn:()=>{updGoal(sel.gid_,g=>({...g,expenses:(g.expenses||[]).filter(e=>e.id!==x.id)}),sel.pid);db_.delete("expenses",x.id).catch(console.error);toast_("Deleted");setMod(m2=>({...m2,confirm:null}));}}}))}>×</button>
               </div>
             ))}
             <div style={{padding:"9px 11px",background:"#721408",borderRadius:8,display:"flex",justifyContent:"space-between",marginBottom:8}}>
@@ -3011,27 +3105,41 @@ function expCost(exp) {
           })()}
           </>;
         })()}
-        {goalTab==="entries"&&<GoalEntriesView entries={selGoal.entries||[]} sel={sel} products={(selProj&&selProj.products)||[]} setMod={setMod} delEntry={delEntry}/>}
+        {goalTab==="entries"&&<>
+          <input ref={el=>importSalesRef.current=el} type="file" accept=".csv" style={{display:"none"}} onChange={e=>{const f=e.target.files[0];if(f){importSalesCSV(f,sel.pid,sel.gid_);e.target.value='';}}}/>
+          <div style={{display:"flex",gap:6,marginBottom:8}}>
+            <button style={{...btnSm,fontSize:11}} onClick={()=>downloadSalesTemplate(sel.pid)}>↓ CSV Template</button>
+            <button style={{...btnSm,fontSize:11}} onClick={()=>importSalesRef.current&&importSalesRef.current.click()}>↑ Import CSV</button>
+          </div>
+          <GoalEntriesView entries={selGoal.entries||[]} sel={sel} products={(selProj&&selProj.products)||[]} setMod={setMod} delEntry={delEntry}/>
+        </>}
         {goalTab==="products"&&(()=>{
           // Collect all entries with cart_items from this goal + sub-goals
           const goalAllEntries=[
             ...(selGoal.entries||[]),
             ...collectEntriesWithCart(selGoal.subGoals||[])
           ];
-          // Build product summary: typeId → {typeName, totalQty, totalRev, byDate}
+          // Build product summary: typeId → {typeName, totalQty, totalRev, byDate, models}
           const ptMap={};
           goalAllEntries.forEach(en=>{
             let cart;
             try{cart=en.cart_items?(typeof en.cart_items==="string"?JSON.parse(en.cart_items):en.cart_items):null;}catch(_){cart=null;}
             if(!Array.isArray(cart)) return;
             cart.forEach(ci=>{
-              if(!ptMap[ci.typeId]) ptMap[ci.typeId]={typeName:ci.typeName,totalQty:0,totalRev:0,days:{}};
-              ptMap[ci.typeId].totalQty+=ci.qty;
-              ptMap[ci.typeId].totalRev+=Number(ci.lineTotal||0);
+              const key=ci.typeId||ci.typeName;
+              if(!ptMap[key]) ptMap[key]={typeName:ci.typeName,totalQty:0,totalRev:0,days:{},models:{}};
+              ptMap[key].totalQty+=ci.qty;
+              ptMap[key].totalRev+=Number(ci.lineTotal||0);
               const d=en.date||"";
-              if(!ptMap[ci.typeId].days[d]) ptMap[ci.typeId].days[d]={qty:0,rev:0};
-              ptMap[ci.typeId].days[d].qty+=ci.qty;
-              ptMap[ci.typeId].days[d].rev+=Number(ci.lineTotal||0);
+              if(!ptMap[key].days[d]) ptMap[key].days[d]={qty:0,rev:0};
+              ptMap[key].days[d].qty+=ci.qty;
+              ptMap[key].days[d].rev+=Number(ci.lineTotal||0);
+              // Collect model counts
+              (ci.models||[]).forEach(m=>{
+                if(!m||!m.name||m.name==="—") return;
+                if(!ptMap[key].models[m.name]) ptMap[key].models[m.name]=0;
+                ptMap[key].models[m.name]++;
+              });
             });
           });
           const ptRows=Object.values(ptMap).sort((a,b)=>b.totalRev-a.totalRev);
@@ -3057,6 +3165,16 @@ function expCost(exp) {
                       </div>
                     </div>
                   ))}
+                  {/* model breakdown */}
+                  {Object.keys(pt.models).length>0&&<div style={{marginTop:8,paddingTop:8,borderTop:"1px solid rgba(250,247,240,0.15)"}}>
+                    <div style={{fontSize:10,letterSpacing:1.5,color:"rgba(250,247,240,0.5)",textTransform:"uppercase",marginBottom:5}}>Models</div>
+                    {Object.entries(pt.models).sort((a,b)=>b[1]-a[1]).map(([name,qty])=>(
+                      <div key={name} style={{display:"flex",justifyContent:"space-between",padding:"3px 0",fontSize:12}}>
+                        <span style={{color:"#FAD5C8"}}>{name}</span>
+                        <span style={{color:"#FAF7F0",fontWeight:600}}>{qty}×</span>
+                      </div>
+                    ))}
+                  </div>}
                 </div>
               </div>
             ))}
