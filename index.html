@@ -3228,28 +3228,6 @@ function expCost(exp) {
               <span style={{fontSize:13,fontWeight:600,color:"#FAF7F0"}}>Total</span>
               <span style={{fontSize:14,fontWeight:700,color:c}}>{fmtGBP(ptRows.reduce((s,r)=>s+r.totalRev,0))}</span>
             </div>
-            {/* DEBUG: raw entry data — temporary, shows exactly what's stored per entry */}
-            <details style={{marginTop:14,background:"#5A1A0A",borderRadius:8,padding:"8px 11px"}}>
-              <summary style={{fontSize:11,color:"#FAD5C8",cursor:"pointer"}}>🔍 Debug: raw entry data ({goalAllEntries.length} entries)</summary>
-              <div style={{marginTop:8,maxHeight:300,overflowY:"auto"}}>
-                {goalAllEntries.map((en,i)=>{
-                  let cart=null,err=null;
-                  try{cart=en.cart_items?(typeof en.cart_items==="string"?JSON.parse(en.cart_items):en.cart_items):null;}catch(ex){err=ex.message;}
-                  return <div key={en.id||i} style={{marginBottom:8,padding:"6px 8px",background:"#721408",borderRadius:6,fontSize:11,color:"#FAD5C8"}}>
-                    <div style={{color:"#FAF7F0",fontWeight:600}}>{en.date} · {en.source} · £{en.amount} · units={en.units}</div>
-                    <div style={{opacity:0.8,marginBottom:3}}>{en.note}</div>
-                    {err&&<div style={{color:"#F87171"}}>cart_items parse error: {err}</div>}
-                    {!en.cart_items&&<div style={{color:"#F87171"}}>no cart_items field</div>}
-                    {cart&&Array.isArray(cart)&&cart.map((ci,ci_i)=>(
-                      <div key={ci_i} style={{marginLeft:8,marginTop:3}}>
-                        — {ci.typeName} (typeId:{ci.typeId||"none"}) qty={ci.qty} lineTotal={ci.lineTotal}
-                        <div style={{marginLeft:10}}>models: {JSON.stringify(ci.models)}</div>
-                      </div>
-                    ))}
-                  </div>;
-                })}
-              </div>
-            </details>
           </div>;
         })()}
         {goalTab==="insights"&&<GoalInsights goal={selGoal} color={c} showProj={sel&&!!sel.pid} projData={sel&&sel.pid?db.projects.find(p=>p.id===sel.pid):null}/>}
