@@ -1022,6 +1022,22 @@ function EditEntryModal({entry, onSave, onClose, availGoals=[], currentGoalId=nu
 
   function buildCartItems(){
     if(parsedCart){
+      // If there's a single cart item type, let "Units Sold" control its qty
+      // (lets users fix mismatched pair counts on old/imported entries)
+      if(parsedCart.length===1){
+        const ci=parsedCart[0];
+        const newQty=Math.max(1,parseInt(e.units)||ci.qty||1);
+        const newModels=Array.from({length:newQty},(_,mi)=>{
+          const mid=editModels[ci.typeId+'_'+mi];
+          if(mid){
+            const m=allModels.find(x=>x.id===mid);
+            return m?{modelId:m.id,name:m.name,cost:Number(m.cost||0)}:null;
+          }
+          return (ci.models&&ci.models[mi])||null;
+        });
+        return [{...ci, qty:newQty, models:newModels}];
+      }
+      // Multiple cart item types in one entry — keep each type's own qty
       return parsedCart.map(ci=>({
         ...ci,
         models:(ci.models||[]).map((orig,mi)=>{
@@ -1075,9 +1091,10 @@ function EditEntryModal({entry, onSave, onClose, availGoals=[], currentGoalId=nu
       <label style={{display:"block",fontSize:11,letterSpacing:1.5,color:"#FAF7F0",textTransform:"uppercase",marginBottom:8,fontWeight:600}}>Models / Modeller</label>
       {parsedCart.map(ci=>{
         const typeModels=allModels.filter(m=>m.product_type_id===ci.typeId&&m.active!==false).sort((a,b)=>a.name.localeCompare(b.name));
+        const displayQty=parsedCart.length===1?Math.max(1,parseInt(e.units)||ci.qty||1):ci.qty;
         return <div key={ci.typeId} style={{marginBottom:10,background:"#721408",borderRadius:8,padding:"9px 11px"}}>
-          <div style={{fontSize:12,fontWeight:700,color:"#FAF7F0",marginBottom:6}}>{ci.typeName} × {ci.qty}</div>
-          {Array.from({length:ci.qty}).map((_,mi)=>{
+          <div style={{fontSize:12,fontWeight:700,color:"#FAF7F0",marginBottom:6}}>{ci.typeName} × {displayQty}{parsedCart.length===1&&displayQty!==ci.qty&&<span style={{color:"#FAD5C8",fontWeight:400}}> (was {ci.qty})</span>}</div>
+          {Array.from({length:displayQty}).map((_,mi)=>{
             const lineKey=ci.typeId+'_'+mi;
             const storedMid=ci.models&&ci.models[mi]&&(ci.models[mi].modelId||ci.models[mi].id);
             const selMid=editModels[lineKey]||(storedMid&&allModels.find(m=>m.id===storedMid)?storedMid:"")||"";
@@ -2047,7 +2064,6 @@ function expCost(exp) {
         if(!amount) return;
         const source=g(col("source"))||"Cash";
         const note=g(col("note"))||"";
-        const units=parseInt(g(col("units"))||"1")||1;
         const ptName=g(col("product_type"));
         const goalName=g(col("goal"));
         // Find product type by name
@@ -2058,8 +2074,11 @@ function expCost(exp) {
           const foundGoal=goals.find(g=>g.name.toLowerCase()===goalName.toLowerCase());
           if(foundGoal) gid_=foundGoal.id;
         }
-        // Build models array from model_1..model_N columns
+        // Count non-empty model_N columns first — if units field doesn't match, trust the model count
         const modelCols=header.map((h,i)=>h.startsWith("model_")?i:-1).filter(i=>i>=0);
+        const filledModelNames=modelCols.map(i=>g(i)).filter(Boolean);
+        const declaredUnits=parseInt(g(col("units"))||"1")||1;
+        const units=Math.max(declaredUnits,filledModelNames.length,1);
         const models=modelCols.slice(0,units).map(i=>{
           const mname=g(i);
           if(!mname) return null;
