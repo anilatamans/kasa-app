@@ -3108,8 +3108,8 @@ function expCost(exp) {
         {goalTab==="entries"&&<>
           <input ref={el=>importSalesRef.current=el} type="file" accept=".csv" style={{display:"none"}} onChange={e=>{const f=e.target.files[0];if(f){importSalesCSV(f,sel.pid,sel.gid_);e.target.value='';}}}/>
           <div style={{display:"flex",gap:6,marginBottom:8}}>
-            <button style={{...btnSm,fontSize:11}} onClick={()=>downloadSalesTemplate(sel.pid)}>↓ CSV Template</button>
-            <button style={{...btnSm,fontSize:11}} onClick={()=>importSalesRef.current&&importSalesRef.current.click()}>↑ Import CSV</button>
+            <button style={{background:"rgba(250,247,240,0.15)",border:"1px solid rgba(250,247,240,0.4)",color:"#FAF7F0",borderRadius:6,fontSize:11,cursor:"pointer",padding:"3px 8px"}} onClick={()=>downloadSalesTemplate(sel.pid)}>↓ CSV Template</button>
+            <button style={{background:"rgba(250,247,240,0.15)",border:"1px solid rgba(250,247,240,0.4)",color:"#FAF7F0",borderRadius:6,fontSize:11,cursor:"pointer",padding:"3px 8px"}} onClick={()=>importSalesRef.current&&importSalesRef.current.click()}>↑ Import CSV</button>
           </div>
           <GoalEntriesView entries={selGoal.entries||[]} sel={sel} products={(selProj&&selProj.products)||[]} setMod={setMod} delEntry={delEntry}/>
         </>}
