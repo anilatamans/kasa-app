@@ -2112,6 +2112,32 @@ function expCost(exp) {
     };
     reader.readAsText(file);
   }
+  function autoFixMissingCartItems(pid, gid_) {
+    const uid=getUserId();
+    const proj=db.projects.find(p=>p.id===pid);
+    if(!proj) return;
+    const pts=proj.productTypes||[];
+    const goal=updGoalDeep(proj.goals||[],gid_,g=>g).find(g=>g.id===gid_) || (proj.goals||[]).flatMap(g=>[g,...(g.subGoals||[])]).find(g=>g.id===gid_);
+    if(!goal) { toast_("Goal not found"); return; }
+    let fixed=0, skipped=0;
+    (goal.entries||[]).forEach(en=>{
+      if(en.cart_items) return; // already has data
+      const note=en.note||"";
+      const m=note.match(/(\d+)\s*x\s+([^·]+)/i);
+      if(!m) { skipped++; return; }
+      const qty=parseInt(m[1]);
+      const typeNameGuess=m[2].trim();
+      const pt=pts.find(p=>p.name.toLowerCase()===typeNameGuess.toLowerCase());
+      if(!pt||!qty) { skipped++; return; }
+      const cartItemsData=[{typeId:pt.id,typeName:pt.name,qty,lineTotal:Number(en.amount)||0,models:Array.from({length:qty},()=>null)}];
+      const newCartItems=JSON.stringify(cartItemsData);
+      updGoal(gid_,g=>({...g,entries:(g.entries||[]).map(e=>e.id===en.id?{...e,cart_items:newCartItems}:e)}),pid);
+      db_.update('entries',en.id,{cart_items:newCartItems}).catch(console.error);
+      fixed++;
+    });
+    if(fixed) toast_(`${fixed} entries fixed${skipped?`, ${skipped} skipped (no match)`:''} ✦`);
+    else toast_(skipped?`No matches found in ${skipped} entries — note must say "Nx Product Name"`:"All entries already have product data");
+  }
   function saveEditProduct(pid, prod) {
     setDb(d=>({...d,projects:d.projects.map(p=>p.id===pid?{...p,products:(p.products||[]).map(pr=>pr.id===prod.id?{...prod,unitCost:parseFloat(prod.unitCost)}:pr)}:p)}));
     db_.update('products',prod.id,{name:prod.name,unit_cost:parseFloat(prod.unitCost),unit:prod.unit||'pair',is_premium:prod.isPremium||false}).catch(console.error);
@@ -3129,6 +3155,7 @@ function expCost(exp) {
           <div style={{display:"flex",gap:6,marginBottom:8}}>
             <button style={{background:"rgba(250,247,240,0.15)",border:"1px solid rgba(250,247,240,0.4)",color:"#FAF7F0",borderRadius:6,fontSize:11,cursor:"pointer",padding:"3px 8px"}} onClick={()=>downloadSalesTemplate(sel.pid)}>↓ CSV Template</button>
             <button style={{background:"rgba(250,247,240,0.15)",border:"1px solid rgba(250,247,240,0.4)",color:"#FAF7F0",borderRadius:6,fontSize:11,cursor:"pointer",padding:"3px 8px"}} onClick={()=>importSalesRef.current&&importSalesRef.current.click()}>↑ Import CSV</button>
+            <button style={{background:"rgba(91,196,160,0.2)",border:"1px solid rgba(91,196,160,0.5)",color:"#5BC4A0",borderRadius:6,fontSize:11,cursor:"pointer",padding:"3px 8px"}} onClick={()=>autoFixMissingCartItems(sel.pid,sel.gid_)}>⚡ Auto-fix missing data</button>
           </div>
           <GoalEntriesView entries={selGoal.entries||[]} sel={sel} products={(selProj&&selProj.products)||[]} setMod={setMod} delEntry={delEntry}/>
         </>}
