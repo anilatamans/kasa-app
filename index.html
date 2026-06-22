@@ -359,6 +359,10 @@ async function authFetch(path, body) {
   });
   return res.json();
 }
+// Change the signed-in user's password (uses their current session token via sbFetch)
+async function updateUserPassword(newPassword) {
+  return sbFetch('/auth/v1/user', {method:'PUT', body: JSON.stringify({password:newPassword})});
+}
 
 // ── DB helpers ────────────────────────────────────────────────
 function queuePending(op) {
@@ -529,6 +533,36 @@ const SRC = {
   Transfer:{emoji:"↔️",color:"#E07840"},
   Other:{emoji:"✦",color:"#FAF7F0"},
 };
+// Built-in payment provider catalog. Rates are realistic UK defaults (checked June 2026) but
+// fully editable per-user in Settings > Payment Methods — actual rates depend on plan/tier.
+// feeType: "none" | "percent" | "percent_fixed"
+const BUILTIN_PAYMENT_METHODS = [
+  {key:"cash", name:"Cash", emoji:"💵", color:"#5A9E6F", feeType:"none", feePercent:0, feeFixed:0, defaultActive:true},
+  {key:"square", name:"Square", emoji:"◾", color:"#00B9C6", feeType:"percent", feePercent:1.75, feeFixed:0, defaultActive:true},
+  {key:"sumup", name:"SumUp", emoji:"🔵", color:"#0AA1DD", feeType:"percent", feePercent:1.69, feeFixed:0, defaultActive:false},
+  {key:"paypal_pos", name:"PayPal POS (Zettle)", emoji:"🅿️", color:"#003087", feeType:"percent", feePercent:1.75, feeFixed:0, defaultActive:false},
+  {key:"shopify", name:"Shopify Payments", emoji:"🛒", color:"#96BF48", feeType:"percent_fixed", feePercent:2.0, feeFixed:0.25, defaultActive:true},
+  {key:"stripe", name:"Stripe", emoji:"🌐", color:"#635BFF", feeType:"percent_fixed", feePercent:1.5, feeFixed:0.20, defaultActive:false},
+  {key:"paypal", name:"PayPal", emoji:"💙", color:"#0070BA", feeType:"percent_fixed", feePercent:2.9, feeFixed:0.30, defaultActive:false},
+  {key:"online", name:"Online", emoji:"🌐", color:"#FAF7F0", feeType:"none", feePercent:0, feeFixed:0, defaultActive:true},
+  {key:"in_person", name:"In-person", emoji:"🤝", color:"#FAF7F0", feeType:"none", feePercent:0, feeFixed:0, defaultActive:true},
+  {key:"transfer", name:"Bank Transfer", emoji:"↔️", color:"#E07840", feeType:"none", feePercent:0, feeFixed:0, defaultActive:true},
+  {key:"other", name:"Other", emoji:"✦", color:"#FAF7F0", feeType:"none", feePercent:0, feeFixed:0, defaultActive:true},
+];
+// Compute the processing fee for a given amount under a payment method's fee config.
+// Returns 0 if pm is missing or has no fee configured.
+function pmFeeLabel(m){
+  if(!m||!m.feeType||m.feeType==="none") return "No fee";
+  if(m.feeType==="percent") return `${m.feePercent}%`;
+  return `${m.feePercent}% + £${Number(m.feeFixed||0).toFixed(2)}`;
+}
+function calcFee(amount, pm){
+  if(!pm||!pm.feeType||pm.feeType==="none") return 0;
+  const amt=Number(amount||0);
+  const pct=amt*(Number(pm.feePercent||0)/100);
+  const fixed=pm.feeType==="percent_fixed"?Number(pm.feeFixed||0):0;
+  return Math.round((pct+fixed)*100)/100;
+}
 const PERIODS = {weekly:"Weekly",monthly:"Monthly",yearly:"Yearly",custom:"Custom"};
 const DAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 
@@ -881,25 +915,27 @@ function GoalInsights({goal, color, showProj=false, projData=null}) {
             </div>
           ))}
         </div>
-        {Object.entries(srcB).sort((a,b)=>b[1]-a[1]).map(([src,v])=>{
-          const feeRates={"Square":0.0175,"Shopify":0.02,"Online":0.029};
-          const fee = feeRates[src] ? v*feeRates[src] : 0;
-          return <SRow key={src}
-            label={`${({"Cash":"💵","Square":"◾","Shopify":"🛒","Online":"🌐","In-person":"🤝","Transfer":"↔️","Other":"✦"})[src]||"✦"} ${src}`}
-            value={fmtGBP(v)}
-            sub={fee>0?`${(total>0?(v/total*100).toFixed(0):0)}% · Fee est. ${fmtGBP(fee)}`:
-              `${total>0?(v/total*100).toFixed(0):0}%`}
-            color={fee>0?"#FAD5C8":undefined}/>;
-        })}
         {(()=>{
-          const sqFee=(srcB["Square"]||0)*0.0175;
-          const shFee=(srcB["Shopify"]||0)*0.02;
-          const totalFee=sqFee+shFee;
+          const feeBySrc={};
+          entries.forEach(e=>{ if(Number(e.feeAmount||0)>0) feeBySrc[e.source||"Other"]=(feeBySrc[e.source||"Other"]||0)+Number(e.feeAmount); });
+          return Object.entries(srcB).sort((a,b)=>b[1]-a[1]).map(([src,v])=>{
+            const fee=feeBySrc[src]||0;
+            return <SRow key={src}
+              label={`${({"Cash":"💵","Square":"◾","Shopify":"🛒","Online":"🌐","In-person":"🤝","Transfer":"↔️","Other":"✦"})[src]||"✦"} ${src}`}
+              value={fmtGBP(v)}
+              sub={fee>0?`${(total>0?(v/total*100).toFixed(0):0)}% · Fee ${fmtGBP(fee)}`:
+                `${total>0?(v/total*100).toFixed(0):0}%`}
+              color={fee>0?"#FAD5C8":undefined}/>;
+          });
+        })()}
+        {(()=>{
+          const feeBySrc={};
+          entries.forEach(e=>{ if(Number(e.feeAmount||0)>0) feeBySrc[e.source||"Other"]=(feeBySrc[e.source||"Other"]||0)+Number(e.feeAmount); });
+          const totalFee=entries.reduce((s,e)=>s+Number(e.feeAmount||0),0);
           if(totalFee===0) return null;
           return <div style={{marginTop:8,background:"#721408",borderRadius:7,padding:"8px 10px",borderLeft:"3px solid #F87171"}}>
-            <div style={{fontSize:11,color:"#FAD5C8",marginBottom:2}}>Estimated platform fees</div>
-            {sqFee>0&&<div style={{fontSize:12,color:"#FAF7F0"}}>Square (1.75%): {fmtGBP(sqFee)}</div>}
-            {shFee>0&&<div style={{fontSize:12,color:"#FAF7F0"}}>Shopify (2.0%): {fmtGBP(shFee)}</div>}
+            <div style={{fontSize:11,color:"#FAD5C8",marginBottom:2}}>Payment processing fees</div>
+            {Object.entries(feeBySrc).sort((a,b)=>b[1]-a[1]).map(([src,v])=><div key={src} style={{fontSize:12,color:"#FAF7F0"}}>{src}: {fmtGBP(v)}</div>)}
             <div style={{fontSize:13,fontWeight:700,color:"#F87171",marginTop:4}}>Total: {fmtGBP(totalFee)}</div>
           </div>;
         })()}
@@ -935,13 +971,15 @@ function GoalInsights({goal, color, showProj=false, projData=null}) {
         (projData.expenses||[]).forEach(e=>{bycat[e.category]=(bycat[e.category]||0)+calcCost(e);});
         const cogsEntries = entries.filter(en=>en.cart_items);
         const cogsTotal = calcCOGS(cogsEntries, projData.models||[], projData.productTypes||[]).reduce((s,r)=>s+r.totalCost,0);
-        const allCosts = totalExp + cogsTotal;
+        const feesTotal = entries.reduce((s,e)=>s+Number(e.feeAmount||0),0);
+        const allCosts = totalExp + cogsTotal + feesTotal;
         if(allCosts<=0) return null;
         const margin = total>0?((total-allCosts)/total*100).toFixed(1):null;
         return (
           <ISec title="Expense Summary">
             <SRow label="Total expenses" value={fmtGBP(totalExp)} color="#F87171"/>
             {cogsTotal>0&&<SRow label="COGS" value={fmtGBP(cogsTotal)} color="#F87171"/>}
+            {feesTotal>0&&<SRow label="Payment fees" value={fmtGBP(feesTotal)} color="#F87171"/>}
             {margin!==null&&<SRow label="Profit margin" value={margin+"%"} color={parseFloat(margin)>=0?"#5A9E6F":"#F87171"}/>}
             {Object.entries(bycat).sort((a,b)=>b[1]-a[1]).map(([cat,v])=>(
               <SRow key={cat} label={cat} value={fmtGBP(v)} color="#FAD5C8"/>
@@ -996,7 +1034,7 @@ function RecurModal({initial, onSave, onClose}) {
   </div></div>;
 }
 
-function EditEntryModal({entry, onSave, onClose, availGoals=[], currentGoalId=null, onMove=null, allModels=[], allProductTypes=[], onAddModel=null}) {
+function EditEntryModal({entry, onSave, onClose, availGoals=[], currentGoalId=null, onMove=null, allModels=[], allProductTypes=[], onAddModel=null, paymentMethods=[]}) {
   const [e, setE] = useState({...entry});
   // Parse cart_items
   const parsedCart = React.useMemo(()=>{
@@ -1091,7 +1129,7 @@ function EditEntryModal({entry, onSave, onClose, availGoals=[], currentGoalId=nu
     </div>
     <div style={S.field}><label style={S.label}>Amount (£)</label><input style={S.input} type="number" value={e.amount} onChange={x=>setE(v=>({...v,amount:x.target.value}))}/></div>
     <div style={S.field}><label style={S.label}>Date</label><input style={S.input} type="date" value={e.date} onChange={x=>setE(v=>({...v,date:x.target.value}))}/></div>
-    <div style={S.field}><label style={S.label}>Source</label><div style={S.chipRow}>{SOURCES.map(s=><Chip key={s} active={e.source===s} onClick={()=>setE(v=>({...v,source:s}))}>{(SRC[s]&&SRC[s].emoji)||"✦"} {s}</Chip>)}</div></div>
+    <div style={S.field}><label style={S.label}>Source</label><div style={S.chipRow}>{(paymentMethods.filter(m=>m.active).length?paymentMethods.filter(m=>m.active).map(m=>m.name):SOURCES).map(s=><Chip key={s} active={e.source===s} onClick={()=>setE(v=>({...v,source:s}))}>{(SRC[s]&&SRC[s].emoji)||"✦"} {s}</Chip>)}</div></div>
     <div style={S.field}><label style={S.label}>Units Sold</label><input style={S.input} type="number" placeholder="0" value={e.units||""} onChange={x=>setE(v=>({...v,units:x.target.value}))}/></div>
     <div style={S.field}><label style={S.label}>Note</label><input style={S.input} value={e.note||""} onChange={x=>setE(v=>({...v,note:x.target.value}))}/></div>
 
@@ -1249,13 +1287,15 @@ function genReport(type, db) {
     const pc=(p.products||[]).reduce((s,pr)=>s+prodCost(pr,pg.flatMap(g=>g.entries||[])),0);
     const gc=pg.reduce((s,g)=>s+sumExpensesArr(g.expenses),0);
     const cogs=calcCOGS(collectEntriesWithCart(pg), p.models||[], p.productTypes||[]).reduce((s,r)=>s+r.totalCost,0);
-    return {name:p.name,income:inc,expenses:ec+pc+gc+cogs,net:inc-ec-pc-gc-cogs};
+    const fees=projectFeesTotal(p);
+    return {name:p.name,income:inc,expenses:ec+pc+gc+cogs+fees,net:inc-ec-pc-gc-cogs-fees,fees};
   });
   const totalInc=pf.reduce((s,p)=>s+p.income,0)+db.goals.reduce((s,g)=>s+sumIncome(g.entries),0);
   const totalExp=pf.reduce((s,p)=>s+p.expenses,0);
+  const totalFees=pf.reduce((s,p)=>s+(p.fees||0),0)+db.goals.reduce((s,g)=>s+goalFeesTotal(g),0);
   const srcB={};allEntries.forEach(e=>{srcB[e.source||"Other"]=(srcB[e.source||"Other"]||0)+Number(e.amount);});
   const hr="─".repeat(44);
-  if(type==="pl") return `KASA — PROFIT & LOSS\n${fd(today())}\n${hr}\n\nINCOME\n${hr}\n${pf.map(p=>`  ${p.name.padEnd(28)} ${fmtGBP(p.income)}`).join("\n")}\n${db.goals.filter(g=>!g.archived).map(g=>`  ${g.name.padEnd(28)} ${fmtGBP(sumIncome(g.entries))}`).join("\n")}\n${hr}\n  ${"TOTAL INCOME".padEnd(28)} ${fmtGBP(totalInc)}\n\nEXPENSES\n${hr}\n${pf.map(p=>`  ${p.name.padEnd(28)} ${fmtGBP(p.expenses)}`).join("\n")}\n${hr}\n  ${"TOTAL EXPENSES".padEnd(28)} ${fmtGBP(totalExp)}\n\n${"═".repeat(44)}\n  ${"NET PROFIT".padEnd(28)} ${fmtGBP(totalInc-totalExp)}\n${"═".repeat(44)}\n\nBY SOURCE\n${hr}\n${Object.entries(srcB).sort((a,b)=>b[1]-a[1]).map(([s,v])=>`  ${s.padEnd(28)} ${fmtGBP(v)}`).join("\n")}\n\nGenerated by KASA`;
+  if(type==="pl") return `KASA — PROFIT & LOSS\n${fd(today())}\n${hr}\n\nINCOME\n${hr}\n${pf.map(p=>`  ${p.name.padEnd(28)} ${fmtGBP(p.income)}`).join("\n")}\n${db.goals.filter(g=>!g.archived).map(g=>`  ${g.name.padEnd(28)} ${fmtGBP(sumIncome(g.entries))}`).join("\n")}\n${hr}\n  ${"TOTAL INCOME".padEnd(28)} ${fmtGBP(totalInc)}\n\nEXPENSES\n${hr}\n${pf.map(p=>`  ${p.name.padEnd(28)} ${fmtGBP(p.expenses)}`).join("\n")}\n${hr}\n  ${"TOTAL EXPENSES".padEnd(28)} ${fmtGBP(totalExp)}\n  ${"  (incl. payment processing fees)".padEnd(28)} ${fmtGBP(totalFees)}\n\n${"═".repeat(44)}\n  ${"NET PROFIT".padEnd(28)} ${fmtGBP(totalInc-totalExp)}\n${"═".repeat(44)}\n\nBY SOURCE\n${hr}\n${Object.entries(srcB).sort((a,b)=>b[1]-a[1]).map(([s,v])=>`  ${s.padEnd(28)} ${fmtGBP(v)}`).join("\n")}\n\nGenerated by KASA`;
   if(type==="monthly"){const mi=allEntries.filter(e=>e.date.startsWith(thisM)).reduce((s,e)=>s+Number(e.amount),0);return `KASA — MONTHLY REPORT\n${now.toLocaleDateString("en-GB",{month:"long",year:"numeric"}).toUpperCase()}\n${fd(today())}\n${hr}\n\nINCOME THIS MONTH: ${fmtGBP(mi)}\n\nGOALS\n${hr}\n${allGoals.filter(g=>!g.archived&&!g._general).map(g=>{const e=sumIncome(g.entries);const p=g.target>0?(e/g.target*100).toFixed(0):0;return `  ${g.name.slice(0,18).padEnd(18)} [${"█".repeat(Math.max(0,Math.min(10,Math.round(p/10))))+"░".repeat(Math.max(0,10-Math.min(10,Math.round(p/10))))}] ${p}%`;}).join("\n")}\n\nGenerated by KASA`;}
   return `KASA — GOALS REPORT\n${fd(today())}\n${hr}\n\n${allGoals.filter(g=>!g.archived&&!g._general).map(g=>{const e=sumIncome(g.entries);return `  ${g.name}\n  ${fmtGBP(e)} / ${fmtGBP(g.target)} (${g.target>0?(e/g.target*100).toFixed(1):0}%)\n  ${daysLeft(g)} days left · ${streak(g.entries)} day streak\n  ${hr}`;}).join("\n")}\n\nGenerated by KASA`;
 }
@@ -1264,9 +1304,9 @@ function dlReport(type, db) {
   const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([c],{type:"text/plain"}));a.download=`kasa_${type}.txt`;a.click();
 }
 function dlCSV(db) {
-  const rows=[["Project","Goal","Date","Amount","Source","Cash","Note","Recurring"]];
-  db.projects.forEach(p=>(p.goals||[]).forEach(g=>(g.entries||[]).forEach(e=>rows.push([p.name,g.name,e.date,e.amount,e.source||"",e.source==="Cash"?"Yes":"No",e.note||"",e.recurring?"Yes":"No"]))));
-  db.goals.forEach(g=>(g.entries||[]).forEach(e=>rows.push(["—",g.name,e.date,e.amount,e.source||"",e.source==="Cash"?"Yes":"No",e.note||"",e.recurring?"Yes":"No"])));
+  const rows=[["Project","Goal","Date","Amount","Source","Fee","Net","Cash","Note","Recurring"]];
+  db.projects.forEach(p=>(p.goals||[]).forEach(g=>(g.entries||[]).forEach(e=>rows.push([p.name,g.name,e.date,e.amount,e.source||"",Number(e.feeAmount||e.fee_amount||0),Number(e.amount)-Number(e.feeAmount||e.fee_amount||0),e.source==="Cash"?"Yes":"No",e.note||"",e.recurring?"Yes":"No"]))));
+  db.goals.forEach(g=>(g.entries||[]).forEach(e=>rows.push(["—",g.name,e.date,e.amount,e.source||"",Number(e.feeAmount||e.fee_amount||0),Number(e.amount)-Number(e.feeAmount||e.fee_amount||0),e.source==="Cash"?"Yes":"No",e.note||"",e.recurring?"Yes":"No"])));
   const csv=rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
   const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download="kasa.csv";a.click();
 }
@@ -1291,7 +1331,7 @@ function NewEntryView({eForm, setEForm, sel, db, sugg, selProj, addEntry, goBack
       <input style={S.input} type="date" value={eForm.date} onChange={e=>setEForm(v=>({...v,date:e.target.value}))}/>
     </div>
     <div style={S.field}><label style={S.label}>Payment Method</label>
-      <div style={S.chipRow}>{["Cash","Square","Shopify","Online","Transfer","Other"].map(s=>(
+      <div style={S.chipRow}>{((db.paymentMethods||[]).filter(m=>m.active).length?(db.paymentMethods||[]).filter(m=>m.active).map(m=>m.name):["Cash","Square","Shopify","Online","Transfer","Other"]).map(s=>(
         <Chip key={s} active={eForm.source===s} color="#FAF7F0" onClick={()=>setEForm(v=>({...v,source:s}))}>{s}</Chip>
       ))}</div>
     </div>
@@ -1418,7 +1458,7 @@ const EX=()=>({name:"",amount:"",category:"Rent",freq:"monthly",startDate:today(
 const EP = () => ({name:"",unitCost:"",unit:"pair"});
 
 function App() {
-  const [db, setDb] = useState({projects:[],goals:[]});
+  const [db, setDb] = useState({projects:[],goals:[],paymentMethods:[]});
   const [view, setView] = useState("dashboard");
   const [sel, setSel] = useState({pid:null,gid_:null});
   const [gForm, setGForm] = useState(EG());
@@ -1457,6 +1497,8 @@ function App() {
   const [posNewModelKey, setPosNewModelKey] = useState(null); // lineKey of active inline-add
   const [posNewModelName, setPosNewModelName] = useState("");
   const [editingExp, setEditingExp] = useState(null);
+  const [pwForm, setPwForm] = useState({newPw:"",confirmPw:""});
+  const [editingPM, setEditingPM] = useState(null); // {id,...} when editing, {isNew:true} when adding a custom method
 
   const [session, setSession] = useState(()=>{
     try{ return JSON.parse(localStorage.getItem('kasa_session')||'null'); } catch{ return null; }
@@ -1571,6 +1613,35 @@ function App() {
         db_.getAll('models'),
       ]);
 
+      // Payment methods live in their own table that may not exist yet (added later via SQL
+      // migration). Fetch it separately so a missing table never breaks the rest of the load —
+      // we fall back to read-only builtin defaults until the user runs the migration.
+      const uid_=getUserId();
+      let pmList=[];
+      try {
+        const rawPm = await db_.getAll('payment_methods');
+        if(rawPm && rawPm.length>0){
+          pmList = rawPm.map(m=>({
+            id:m.id, name:m.name, emoji:m.emoji, color:m.color,
+            feeType:m.fee_type, feePercent:Number(m.fee_percent||0), feeFixed:Number(m.fee_fixed||0),
+            isCustom:!!m.is_custom, active:!!m.active, sortOrder:Number(m.sort_order||0)
+          })).sort((a,b)=>a.sortOrder-b.sortOrder);
+        } else if(rawPm) {
+          // Table exists but empty for this user — seed builtin defaults once.
+          const seeded = BUILTIN_PAYMENT_METHODS.map((b,i)=>({
+            id:gid(), name:b.name, emoji:b.emoji, color:b.color, feeType:b.feeType,
+            feePercent:b.feePercent, feeFixed:b.feeFixed, isCustom:false, active:b.defaultActive, sortOrder:i
+          }));
+          pmList = seeded;
+          if(uid_) seeded.forEach(m=>{
+            db_.insert('payment_methods',{id:m.id,user_id:uid_,name:m.name,emoji:m.emoji,color:m.color,fee_type:m.feeType,fee_percent:m.feePercent,fee_fixed:m.feeFixed,is_custom:false,active:m.active,sort_order:m.sortOrder}).catch(console.error);
+          });
+        }
+      } catch(pmErr) {
+        console.warn('payment_methods table not available yet — using read-only defaults until migration is run:', pmErr.message);
+        pmList = BUILTIN_PAYMENT_METHODS.map((b,i)=>({id:'builtin_'+b.key, name:b.name, emoji:b.emoji, color:b.color, feeType:b.feeType, feePercent:b.feePercent, feeFixed:b.feeFixed, isCustom:false, active:b.defaultActive, sortOrder:i, _ephemeral:true}));
+      }
+
       // Build the nested structure our app expects
       // Helper to build goal hierarchy recursively (up to 4 levels)
       function buildGoal(g, allGoals, allExpenses, allEntries, depth=0) {
@@ -1585,7 +1656,7 @@ function App() {
           recurring: normalRec,
           entries: allEntries.filter(e=>e.goal_id===g.id).map(e=>({
             ...e, amount:Number(e.amount), units:Number(e.units||0),
-            date: e.date, recurring: e.is_recurring
+            date: e.date, recurring: e.is_recurring, feeAmount: Number(e.fee_amount||0)
           })).sort((a,b)=>b.date.localeCompare(a.date)),
           expenses: (allExpenses||[]).filter(e=>e.goal_id===g.id).map(e=>({
             ...e, amount:Number(e.amount), startDate:e.start_date, freq:e.freq||'monthly'
@@ -1617,7 +1688,7 @@ function App() {
 
       const indepGoals = (goals||[]).filter(g=>!g.project_id&&!g.parent_id).map(g=>buildGoal(g,goals||[],expenses||[],entries||[]));
 
-      setDb({projects: builtProjects, goals: applyRec(indepGoals)});
+      setDb({projects: builtProjects, goals: applyRec(indepGoals), paymentMethods: pmList});
       setSyncStatus('idle');
       flushPendingSync(); // Retry any failed saves
     } catch(e) {
@@ -1656,6 +1727,28 @@ function collectEntriesWithCart(goals){
     collectEntriesWithCart(g.subGoals||[]).forEach(x=>r.push(x));
   });
   return r;
+}
+// Collect ALL entries (regardless of cart_items) from a goal tree recursively
+function collectAllEntries(goals){
+  const r=[];
+  (goals||[]).forEach(g=>{
+    (g.entries||[]).forEach(en=>r.push(en));
+    collectAllEntries(g.subGoals||[]).forEach(x=>r.push(x));
+  });
+  return r;
+}
+// Total payment-processing fees for a goal + its sub-goals.
+// Fees are snapshotted onto each entry at the time of sale (see calcFee), so this is a
+// straight sum — editing a payment method's rate later does not change past totals.
+function goalFeesTotal(goal) {
+  if(!goal) return 0;
+  const entries=[...(goal.entries||[]), ...collectAllEntries(goal.subGoals||[])];
+  return entries.reduce((s,en)=>s+Number(en.feeAmount||0),0);
+}
+// Total payment-processing fees across an entire project (all goals + sub-goals)
+function projectFeesTotal(proj) {
+  if(!proj) return 0;
+  return collectAllEntries(proj.goals||[]).reduce((s,en)=>s+Number(en.feeAmount||0),0);
 }
 // Build COGS rows from entries + live models + product types (for defaultModelCost fallback)
 function calcCOGS(entries, liveModels, liveProductTypes){
@@ -1800,7 +1893,9 @@ function sumExpensesArr(expenses) {
       const baseNote=f.note||`${units}x ${pt.name}`;
       finalNote=modelLabels.length?baseNote+" · "+modelLabels.join(", "):baseNote;
     }
-    const entry={id:gid(),amount:parseFloat(f.amount),note:finalNote,source:f.source,date:f.date||today(),ts:Date.now(),units:f.units?parseFloat(f.units):0,productId:null,cart_items:cartItemsData?JSON.stringify(cartItemsData):null};
+    const pmObj=(db.paymentMethods||[]).find(m=>m.name===f.source);
+    const feeAmount=calcFee(parseFloat(f.amount)||0, pmObj);
+    const entry={id:gid(),amount:parseFloat(f.amount),note:finalNote,source:f.source,date:f.date||today(),ts:Date.now(),units:f.units?parseFloat(f.units):0,productId:null,cart_items:cartItemsData?JSON.stringify(cartItemsData):null,feeAmount};
     if(f.goalId) {
       updGoal(f.goalId, g=>({...g,entries:[...(g.entries||[]),entry].sort((a,b)=>b.date.localeCompare(a.date))}), pid);
     } else if(pid) {
@@ -1816,7 +1911,7 @@ function sumExpensesArr(expenses) {
     if(uid){
       const goalId=f.goalId||sel.gid_||null;
       const projId=f.projectId||sel.pid||null;
-      db_.insert("entries",{id:entry.id,user_id:uid,goal_id:goalId,project_id:projId,amount:entry.amount,source:entry.source||"Cash",note:entry.note||null,date:entry.date||today(),units:entry.units||0,is_recurring:false,cart_items:entry.cart_items||null}).catch(e=>console.error("Entry save failed:",e));
+      db_.insert("entries",{id:entry.id,user_id:uid,goal_id:goalId,project_id:projId,amount:entry.amount,source:entry.source||"Cash",note:entry.note||null,date:entry.date||today(),units:entry.units||0,is_recurring:false,cart_items:entry.cart_items||null,fee_amount:feeAmount}).catch(e=>console.error("Entry save failed:",e));
       if(cartItemsData) decrementStock(projId, cartItemsData);
     }
     setEForm(EE()); setView(sel.gid_?"goal":sel.pid?"project":"dashboard"); toast_("Income added ✦");
@@ -1879,6 +1974,32 @@ function sumExpensesArr(expenses) {
     setDb(d=>({...d,projects:d.projects.map(p=>p.id!==pid?p:{...p,models:(p.models||[]).map(m=>m.id===mId?{...m,...updates,stock:stockVal}:m)})}));
     db_.update('models',mId,{name:updates.name,cost:Number(updates.cost||0),product_type_id:updates.product_type_id||null,active:updates.active!==false,stock:stockVal}).catch(console.error);
     toast_("Saved ✦");
+  }
+  // ── Payment Methods (per-user, Settings > Payment Methods) ──
+  function togglePaymentMethod(pmId, active) {
+    const uid=getUserId(); if(!uid) return;
+    setDb(d=>({...d,paymentMethods:(d.paymentMethods||[]).map(m=>m.id===pmId?{...m,active}:m)}));
+    if(!String(pmId).startsWith('builtin_')) db_.update('payment_methods',pmId,{active}).catch(console.error);
+  }
+  function addPaymentMethod(data) {
+    const uid=getUserId(); if(!uid) return;
+    const sortOrder=(db.paymentMethods||[]).length;
+    const newM={id:gid(), name:data.name, emoji:data.emoji||"✦", color:data.color||"#FAF7F0",
+      feeType:data.feeType||"none", feePercent:Number(data.feePercent||0), feeFixed:Number(data.feeFixed||0),
+      isCustom:true, active:true, sortOrder};
+    setDb(d=>({...d,paymentMethods:[...(d.paymentMethods||[]),newM]}));
+    db_.insert('payment_methods',{id:newM.id,user_id:uid,name:newM.name,emoji:newM.emoji,color:newM.color,fee_type:newM.feeType,fee_percent:newM.feePercent,fee_fixed:newM.feeFixed,is_custom:true,active:true,sort_order:sortOrder}).catch(console.error);
+    toast_("Payment method added ✦");
+  }
+  function updatePaymentMethod(pmId, updates) {
+    setDb(d=>({...d,paymentMethods:(d.paymentMethods||[]).map(m=>m.id===pmId?{...m,...updates}:m)}));
+    if(!String(pmId).startsWith('builtin_')) db_.update('payment_methods',pmId,{name:updates.name,emoji:updates.emoji,color:updates.color,fee_type:updates.feeType,fee_percent:Number(updates.feePercent||0),fee_fixed:Number(updates.feeFixed||0)}).catch(console.error);
+    toast_("Saved ✦");
+  }
+  function deletePaymentMethod(pmId) {
+    setDb(d=>({...d,paymentMethods:(d.paymentMethods||[]).filter(m=>m.id!==pmId)}));
+    if(!String(pmId).startsWith('builtin_')) db_.delete('payment_methods',pmId).catch(console.error);
+    toast_("Payment method removed ✦");
   }
   // Decrement stock for each model used in a cart_items array (after a sale)
   function decrementStock(pid, cartItemsArr) {
@@ -2122,14 +2243,6 @@ function sumExpensesArr(expenses) {
     function sigOf(date,amount,source,ptName,units,modelNames){
       return [date, Number(amount||0).toFixed(2), (source||'').toLowerCase().trim(), (ptName||'').toLowerCase().trim(), units, (modelNames||[]).map(x=>x.toLowerCase().trim()).sort().join('|')].join('::');
     }
-    function collectAllEntries(goalsArr){
-      const r=[];
-      (goalsArr||[]).forEach(gl=>{
-        (gl.entries||[]).forEach(en=>r.push(en));
-        collectAllEntries(gl.subGoals||[]).forEach(x=>r.push(x));
-      });
-      return r;
-    }
     const existingSigs=new Set(collectAllEntries(goals).map(en=>{
       let cart=null; try{cart=en.cart_items?(typeof en.cart_items==="string"?JSON.parse(en.cart_items):en.cart_items):null;}catch(_){}
       const ci=Array.isArray(cart)&&cart.length?cart[0]:null;
@@ -2198,7 +2311,9 @@ function sumExpensesArr(expenses) {
           const modelLabels=models.filter(Boolean).map(m=>m.name);
           const finalNote=note||(pt?`${units}x ${pt.name}`:"")||"";
           const finalNoteWithModels=modelLabels.length?finalNote+" · "+modelLabels.join(", "):finalNote;
-          const entry={id:gid(),amount,note:finalNoteWithModels,source,date,ts:Date.now(),units,productId:null,cart_items:cartItemsData.length?JSON.stringify(cartItemsData):null};
+          const pmObj=(db.paymentMethods||[]).find(m=>m.name===source);
+          const feeAmount=calcFee(amount, pmObj);
+          const entry={id:gid(),amount,note:finalNoteWithModels,source,date,ts:Date.now(),units,productId:null,cart_items:cartItemsData.length?JSON.stringify(cartItemsData):null,feeAmount};
           if(gid_){
             updGoal(gid_,g=>({...g,entries:[...(g.entries||[]),entry].sort((a,b)=>b.date.localeCompare(a.date))}),pid);
           } else {
@@ -2210,7 +2325,7 @@ function sumExpensesArr(expenses) {
               return {...p,goals:[...rest,{...gen,entries:[...(gen.entries||[]),entry].sort((a,b)=>b.date.localeCompare(a.date))}]};
             })}));
           }
-          db_.insert("entries",{id:entry.id,user_id:uid,goal_id:gid_||null,project_id:pid,amount,source,note:finalNoteWithModels,date,units,cart_items:entry.cart_items||null}).catch(console.error);
+          db_.insert("entries",{id:entry.id,user_id:uid,goal_id:gid_||null,project_id:pid,amount,source,note:finalNoteWithModels,date,units,cart_items:entry.cart_items||null,fee_amount:feeAmount}).catch(console.error);
           if(cartItemsData.length) allCartItemsForStock.push(...cartItemsData);
           added++;
         });
@@ -2286,6 +2401,7 @@ function sumExpensesArr(expenses) {
     }
     else if(view==="newSubGoal"){setView("goal");}
     else if(view==="newGoalExpense"){setView("goal");}
+    else if(view==="paymentMethods"){setView("profile");}
     else if(view==="reports"){setView("dashboard");}
     else if(["project","newProject"].includes(view)){setView("dashboard");setSel({pid:null,gid_:null});}
     else if(["newGoal","newEntry","newExpense","newProduct"].includes(view)){
@@ -2298,7 +2414,8 @@ function sumExpensesArr(expenses) {
     const grossIncome=sumGoalTotal(goal);
     const expTotal=goalExpTotal(goal);
     const cogsTotal=goalCOGSTotal(goal,pid);
-    const earned=grossIncome-expTotal-cogsTotal;
+    const feesTotal=goalFeesTotal(goal);
+    const earned=grossIncome-expTotal-cogsTotal-feesTotal;
     const pct=Math.min(100,(earned/Math.max(goal.target,1))*100);
     const c=(CAT[goal.category]||CAT.other).color;
     const s=streak(goal.entries);
@@ -2496,19 +2613,60 @@ function sumExpensesArr(expenses) {
         </div>
       </div></div>;
     })()}
+    {editingPM&&(()=>{
+      const p=editingPM;
+      const valid=p.name&&p.name.trim().length>0&&(p.feeType==="none"||(p.feePercent!==""&&!isNaN(parseFloat(p.feePercent))));
+      return <div style={S.overlay}><div style={S.modal}>
+        <div style={{fontSize:17,fontWeight:700,marginBottom:14}}>{p.isNew?"Add Payment Method":"Edit Payment Method"}</div>
+        <div style={S.field}><label style={S.label}>Name</label>
+          <input style={S.input} placeholder="e.g. Klarna, Cash App, Till float" value={p.name} onChange={e=>setEditingPM(v=>({...v,name:e.target.value}))} disabled={!p.isCustom&&!p.isNew}/>
+        </div>
+        <div style={S.field}><label style={S.label}>Fee</label>
+          <div style={S.chipRow}>
+            {[{k:"none",l:"No fee"},{k:"percent",l:"% only"},{k:"percent_fixed",l:"% + fixed"}].map(o=>(
+              <Chip key={o.k} active={p.feeType===o.k} onClick={()=>setEditingPM(v=>({...v,feeType:o.k}))}>{o.l}</Chip>
+            ))}
+          </div>
+        </div>
+        {p.feeType!=="none"&&<div style={S.field}><label style={S.label}>Percentage (%)</label>
+          <input style={S.input} type="number" step="0.01" placeholder="1.75" value={p.feePercent} onChange={e=>setEditingPM(v=>({...v,feePercent:e.target.value}))}/>
+        </div>}
+        {p.feeType==="percent_fixed"&&<div style={S.field}><label style={S.label}>Fixed fee (£)</label>
+          <input style={S.input} type="number" step="0.01" placeholder="0.25" value={p.feeFixed} onChange={e=>setEditingPM(v=>({...v,feeFixed:e.target.value}))}/>
+        </div>}
+        <div style={{display:"flex",flexDirection:"column",gap:8,marginTop:6}}>
+          <button style={{...S.btn,opacity:valid?1:0.4}} onClick={()=>{
+            if(!valid) return;
+            const data={name:p.name.trim(),emoji:p.emoji||"✦",color:p.color||"#FAF7F0",feeType:p.feeType,feePercent:p.feePercent||0,feeFixed:p.feeFixed||0};
+            if(p.isNew) addPaymentMethod(data); else updatePaymentMethod(p.id,data);
+            setEditingPM(null);
+          }}>{p.isNew?"Add":"Save"}</button>
+          {!p.isNew&&p.isCustom&&<button style={{...S.btnGhost,borderColor:"#C0392B",color:"#F87171"}} onClick={()=>{deletePaymentMethod(p.id);setEditingPM(null);}}>Delete</button>}
+          <button style={S.btnGhost} onClick={()=>setEditingPM(null)}>Cancel</button>
+        </div>
+      </div></div>;
+    })()}
     {mod.editEntry&&<EditEntryModal
       entry={mod.editEntry.entry}
       currentGoalId={mod.editEntry.gid_}
       allModels={(()=>{const pid=mod.editEntry.pid;if(pid){const p=db.projects.find(pr=>pr.id===pid);return p?p.models||[]:[]}return[];})()}
       allProductTypes={(()=>{const pid=mod.editEntry.pid;if(pid){const p=db.projects.find(pr=>pr.id===pid);return p?p.productTypes||[]:[]}return[];})()}
       onAddModel={(typeId,newM)=>{addModel(mod.editEntry.pid,newM);}}
+      paymentMethods={db.paymentMethods||[]}
       availGoals={(()=>{
         const pid=mod.editEntry.pid;
         if(pid){const p=db.projects.find(pr=>pr.id===pid);return (p&&p.goals||[]).filter(g=>!g.archived);}
         return db.goals.filter(g=>!g.archived);
       })()}
       onMove={(toGoalId,toGoalName)=>{setMod(m=>({...m,editEntry:null,confirm:{title:"Confirm Move",text:`Move this entry to "${toGoalName}"?`,confirmLabel:"Move",fn:()=>{moveEntry(mod.editEntry.entry,mod.editEntry.gid_,toGoalId,mod.editEntry.pid);setMod(m2=>({...m2,confirm:null}));}}}));}}
-      onClose={()=>setMod(m=>({...m,editEntry:null}))} onSave={updated=>{updGoal(mod.editEntry.gid_,g=>({...g,entries:(g.entries||[]).map(e=>e.id===updated.id?updated:e).sort((a,b)=>b.date.localeCompare(a.date))}),mod.editEntry.pid);db_.update('entries',updated.id,{amount:updated.amount,note:updated.note||null,date:updated.date,source:updated.source,units:updated.units||0,cart_items:updated.cart_items||null}).catch(console.error);setMod(m=>({...m,editEntry:null}));toast_("Updated ✦");}}/>}
+      onClose={()=>setMod(m=>({...m,editEntry:null}))} onSave={updated=>{
+        const pmObj=(db.paymentMethods||[]).find(m=>m.name===updated.source);
+        const feeAmount=calcFee(updated.amount, pmObj);
+        const updated2={...updated, feeAmount};
+        updGoal(mod.editEntry.gid_,g=>({...g,entries:(g.entries||[]).map(e=>e.id===updated2.id?updated2:e).sort((a,b)=>b.date.localeCompare(a.date))}),mod.editEntry.pid);
+        db_.update('entries',updated2.id,{amount:updated2.amount,note:updated2.note||null,date:updated2.date,source:updated2.source,units:updated2.units||0,cart_items:updated2.cart_items||null,fee_amount:feeAmount}).catch(console.error);
+        setMod(m=>({...m,editEntry:null}));toast_("Updated ✦");
+      }}/>}
     {mod.recur&&<RecurModal initial={mod.recur.data} onClose={()=>setMod(m=>({...m,recur:null}))} onSave={r=>{
       const newRule={...r,id:mod.recur.ruleId||gid(),lastApplied:today()};
       updGoal(mod.recur.gid_,g=>{
@@ -2631,11 +2789,13 @@ function sumExpensesArr(expenses) {
           const noteStr = posNote || cart.map(i=>`${i.qty}x ${i.typeName}`).join(", ");
           const modelLabels=cartItemsData.flatMap(ci=>ci.models.filter(Boolean).map(m=>m.name));
           const finalNoteStr=modelLabels.length?noteStr+" · "+modelLabels.join(", "):noteStr;
+          const pmObj=(db.paymentMethods||[]).find(m=>m.name===posPayment);
+          const feeAmount=calcFee(finalTotal, pmObj);
           const entry = {
             id:gid(), amount:finalTotal, note:finalNoteStr,
             source:posPayment, date:posDate||today(), ts:Date.now(),
             units:totalUnits, productId:null,
-            cart_items: JSON.stringify(cartItemsData)
+            cart_items: JSON.stringify(cartItemsData), feeAmount
           };
           const targetGoalId = posGoalId;
           const pid = sel.pid;
@@ -2650,7 +2810,7 @@ function sumExpensesArr(expenses) {
               return {...p,goals:[...rest,{...gen,entries:[...(gen.entries||[]),entry].sort((a,b)=>b.date.localeCompare(a.date))}]};
             })}));
           }
-          if(uid) db_.insert("entries",{id:entry.id,user_id:uid,goal_id:targetGoalId||null,project_id:pid,amount:finalTotal,source:posPayment,note:finalNoteStr,date:posDate||today(),units:totalUnits,cart_items:JSON.stringify(cartItemsData)}).catch(console.error);
+          if(uid) db_.insert("entries",{id:entry.id,user_id:uid,goal_id:targetGoalId||null,project_id:pid,amount:finalTotal,source:posPayment,note:finalNoteStr,date:posDate||today(),units:totalUnits,cart_items:JSON.stringify(cartItemsData),fee_amount:feeAmount}).catch(console.error);
           decrementStock(pid, cartItemsData);
           setPosMode(false); setCart([]); setPosModelLines({}); toast_(`Sale saved — ${fmtGBP(finalTotal)} ✦`);
         }
@@ -2777,7 +2937,7 @@ function sumExpensesArr(expenses) {
               <div style={{marginBottom:10}}>
                 <div style={{fontSize:10,letterSpacing:2,color:"#FAD5C8",textTransform:"uppercase",marginBottom:8}}>Payment</div>
                 <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-                  {["Cash","Square","Shopify","Online"].map(s=>(
+                  {((db.paymentMethods||[]).filter(m=>m.active).length?(db.paymentMethods||[]).filter(m=>m.active).map(m=>m.name):["Cash","Square","Shopify","Online"]).map(s=>(
                     <div key={s} style={{background:posPayment===s?"#FAF7F0":"#721408",border:`1px solid ${posPayment===s?"#FAF7F0":"rgba(250,247,240,0.3)"}`,color:posPayment===s?"#8B1A0F":"#FAF7F0",borderRadius:7,padding:"7px 12px",fontSize:12,cursor:"pointer",fontWeight:posPayment===s?700:400}} onClick={()=>setPosPayment(s)}>{s}</div>
                   ))}
                 </div>
@@ -2851,7 +3011,8 @@ function sumExpensesArr(expenses) {
           <button style={{background:"rgba(250,247,240,0.15)",color:"#FAF7F0",border:"1px solid #FAF7F0",borderRadius:6,padding:"5px 10px",fontSize:13,fontWeight:700,cursor:"pointer"}} onClick={()=>{setXForm(EX());setView("newGoalExpense");}}>+ Expense</button>
           {sel.pid&&<button style={{background:"#5A9E6F",color:"#fff",border:"none",borderRadius:6,padding:"5px 10px",fontSize:13,fontWeight:700,cursor:"pointer"}} onClick={()=>{setPosMode(true);setCart([]);setPosPayment("Cash");setPosNote("");setPosGoalId(sel.gid_);setPosDiscount("");setPosDate(today());setPosModelLines({});}}>🛍 Sale</button>}
         </>}
-        <button style={{background:"none",border:"none",color:"#FAD5C8",fontSize:18,cursor:"pointer",padding:"2px 6px",lineHeight:1,marginLeft:4}} onClick={logout} title="Sign out">⏻</button>
+        <button style={{background:"none",border:"none",color:"#FAD5C8",fontSize:16,cursor:"pointer",padding:"2px 6px",lineHeight:1,marginLeft:4}} onClick={()=>setView("profile")} title="Profile & Settings">⚙</button>
+        <button style={{background:"none",border:"none",color:"#FAD5C8",fontSize:18,cursor:"pointer",padding:"2px 6px",lineHeight:1}} onClick={logout} title="Sign out">⏻</button>
       </div>
     </div>
 
@@ -2874,7 +3035,8 @@ function sumExpensesArr(expenses) {
             const pc=(p.products||[]).reduce((s,pr)=>s+prodCost(pr,allE),0);
             const gc=pg.reduce((s,g)=>s+goalExpTotal(g),0);
             const cogs=projectCOGSTotal(p);
-            const net=inc-ec-pc-gc-cogs;
+            const fees=projectFeesTotal(p);
+            const net=inc-ec-pc-gc-cogs-fees;
             return <div key={p.id} style={{...S.card,cursor:"pointer"}} className="hov" onClick={()=>goPrj(p.id)}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                 <div>
@@ -2926,12 +3088,13 @@ function sumExpensesArr(expenses) {
       const pc=(selProj.products||[]).reduce((s,pr)=>s+prodCost(pr,allE),0);
       const gc=(selProj.goals||[]).reduce((s,g)=>s+goalExpTotal(g),0);
       const cogs=projectCOGSTotal(selProj);
-      const net=inc-ec-pc-gc-cogs;
+      const fees=projectFeesTotal(selProj);
+      const net=inc-ec-pc-gc-cogs-fees;
       return <div style={S.page}>
         <div style={S.card}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div style={{fontSize:20,fontWeight:700}}>{selProj.name}</div><button style={{background:"rgba(250,247,240,0.15)",border:"1px solid #FAF7F0",color:"#FAF7F0",borderRadius:5,fontSize:11,cursor:"pointer",padding:"4px 9px"}} onClick={()=>setEditingProj({pid:selProj.id,name:selProj.name})}>Edit</button></div>
           <div style={{display:"flex",gap:14,marginTop:10,flexWrap:"wrap"}}>
-            {[{l:"Income",v:fmtGBP(inc),c:"#FAF7F0"},{l:"Expenses",v:fmtGBP(ec+pc+gc+cogs),c:"#E07840"},{l:"Net",v:fmtGBP(net),c:net>=0?"#5A9E6F":"#E07840"}].map(({l,v,c})=><div key={l}><div style={{fontSize:13,fontWeight:500,color:"#FAF7F0",letterSpacing:2,textTransform:"uppercase"}}>{l}</div><div style={{fontSize:18,fontWeight:700,color:c,marginTop:1}}>{v}</div></div>)}
+            {[{l:"Income",v:fmtGBP(inc),c:"#FAF7F0"},{l:"Expenses",v:fmtGBP(ec+pc+gc+cogs+fees),c:"#E07840"},{l:"Net",v:fmtGBP(net),c:net>=0?"#5A9E6F":"#E07840"}].map(({l,v,c})=><div key={l}><div style={{fontSize:13,fontWeight:500,color:"#FAF7F0",letterSpacing:2,textTransform:"uppercase"}}>{l}</div><div style={{fontSize:18,fontWeight:700,color:c,marginTop:1}}>{v}</div></div>)}
           </div>
         </div>
         <Tabs tabs={["goals","income","expenses","products","insights"]} active={projTab} onChange={setProjTab}/>
@@ -3193,7 +3356,8 @@ function sumExpensesArr(expenses) {
       const grossInc=sumGoalTotal(selGoal);
       const goalExpOnly=goalExpTotal(selGoal);
       const goalCogs=goalCOGSTotal(selGoal,sel.pid);
-      const goalExp=goalExpOnly+goalCogs;
+      const goalFees=goalFeesTotal(selGoal);
+      const goalExp=goalExpOnly+goalCogs+goalFees;
       const earned=grossInc-goalExp;
       const pct=Math.min(100,(earned/Math.max(selGoal.target,1))*100);
       const c=selCfg.color;
@@ -3206,7 +3370,7 @@ function sumExpensesArr(expenses) {
           {goalExp>0
             ?<div style={{display:"flex",gap:16,marginBottom:selGoal._general?0:6,flexWrap:"wrap"}}>
               <div><div style={{fontSize:10,letterSpacing:1.5,color:"#FAD5C8",textTransform:"uppercase"}}>Income</div><div style={{fontSize:22,fontWeight:700,color:c}}>{fmtGBP(grossInc)}</div></div>
-              <div><div style={{fontSize:10,letterSpacing:1.5,color:"#FAD5C8",textTransform:"uppercase"}}>Expenses{goalCogs>0?" + COGS":""}</div><div style={{fontSize:22,fontWeight:700,color:"#F87171"}}>−{fmtGBP(goalExp)}</div></div>
+              <div><div style={{fontSize:10,letterSpacing:1.5,color:"#FAD5C8",textTransform:"uppercase"}}>Expenses{goalCogs>0?" + COGS":""}{goalFees>0?" + Fees":""}</div><div style={{fontSize:22,fontWeight:700,color:"#F87171"}}>−{fmtGBP(goalExp)}</div></div>
               <div><div style={{fontSize:10,letterSpacing:1.5,color:"#FAD5C8",textTransform:"uppercase"}}>Net</div><div style={{fontSize:22,fontWeight:700,color:earned>=0?c:"#F87171"}}>{fmtGBP(earned)}</div></div>
             </div>
             :<div style={{fontSize:34,fontWeight:700,color:c,lineHeight:1,marginBottom:selGoal._general?0:6}}>{fmtGBP(earned)}</div>
@@ -3430,6 +3594,66 @@ function sumExpensesArr(expenses) {
       <div style={{fontSize:19,fontWeight:700,marginBottom:18,letterSpacing:1.5}}>New Project</div>
       <div style={S.field}><label style={S.label}>Project Name</label><input style={S.input} placeholder="Yuppa, Vinted Store..." value={gForm.name} onChange={e=>setGForm(v=>({...v,name:e.target.value}))}/></div>
       <button style={{...S.btn,opacity:gForm.name?1:0.4}} onClick={addProject}>Create Project</button>
+    </div>}
+
+    {/* PROFILE */}
+    {view==="profile"&&<div style={S.page}>
+      <div style={{fontSize:19,fontWeight:700,marginBottom:18,letterSpacing:1.5}}>Profile & Settings</div>
+      <div style={S.card}>
+        <div style={{fontSize:11,letterSpacing:2,color:"#FAD5C8",textTransform:"uppercase",marginBottom:4}}>Account</div>
+        <div style={{fontSize:15,fontWeight:500}}>{(session&&session.user&&session.user.email)||"—"}</div>
+      </div>
+      <div style={S.card}>
+        <div style={{fontSize:14,fontWeight:700,marginBottom:12}}>Change Password</div>
+        <div style={S.field}><label style={S.label}>New Password</label>
+          <input style={S.input} type="password" placeholder="At least 6 characters" value={pwForm.newPw} onChange={e=>setPwForm(v=>({...v,newPw:e.target.value}))}/>
+        </div>
+        <div style={S.field}><label style={S.label}>Confirm Password</label>
+          <input style={S.input} type="password" placeholder="Repeat password" value={pwForm.confirmPw} onChange={e=>setPwForm(v=>({...v,confirmPw:e.target.value}))}/>
+        </div>
+        <button style={{...S.btn,opacity:(pwForm.newPw&&pwForm.newPw.length>=6&&pwForm.newPw===pwForm.confirmPw)?1:0.4}}
+          onClick={async()=>{
+            if(pwForm.newPw.length<6){toast_("Password must be at least 6 characters");return;}
+            if(pwForm.newPw!==pwForm.confirmPw){toast_("Passwords don't match");return;}
+            try{ await updateUserPassword(pwForm.newPw); setPwForm({newPw:"",confirmPw:""}); toast_("Password updated ✦"); }
+            catch(err){ console.error(err); toast_("Could not update password"); }
+          }}>Update Password</button>
+      </div>
+      <div style={S.card} className="hov" onClick={()=>setView("paymentMethods")}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}}>
+          <div>
+            <div style={{fontSize:14,fontWeight:700}}>Payment Methods</div>
+            <div style={{fontSize:12,color:"#FAD5C8",marginTop:2}}>{(db.paymentMethods||[]).filter(m=>m.active).length} active · manage providers & fees</div>
+          </div>
+          <div style={{fontSize:18,color:"#FAD5C8"}}>→</div>
+        </div>
+      </div>
+    </div>}
+
+    {/* PAYMENT METHODS */}
+    {view==="paymentMethods"&&<div style={S.page}>
+      <div style={{fontSize:19,fontWeight:700,marginBottom:6,letterSpacing:1.5}}>Payment Methods</div>
+      <div style={{fontSize:12,color:"#FAD5C8",marginBottom:16}}>Turn on the providers you actually use. Each one's fee is applied automatically to sales and subtracted from Net.</div>
+      {(db.paymentMethods||[]).slice().sort((a,b)=>(a.sortOrder||0)-(b.sortOrder||0)).map(m=>(
+        <div key={m.id} style={{...S.card,marginBottom:7,padding:"11px 13px"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <div style={{display:"flex",alignItems:"center",gap:9}}>
+              <span style={{fontSize:18}}>{m.emoji}</span>
+              <div>
+                <div style={{fontSize:14,fontWeight:700}}>{m.name}{m.isCustom?<span style={{fontSize:10,color:"#FAD5C8",marginLeft:6,fontWeight:400}}>custom</span>:""}</div>
+                <div style={{fontSize:12,color:"#FAD5C8",marginTop:1}}>{pmFeeLabel(m)}</div>
+              </div>
+            </div>
+            <div style={{display:"flex",alignItems:"center",gap:6}}>
+              <button style={{background:"rgba(250,247,240,0.15)",border:"1px solid #FAF7F0",color:"#FAF7F0",borderRadius:5,fontSize:11,cursor:"pointer",padding:"4px 9px"}}
+                onClick={()=>setEditingPM({id:m.id,name:m.name,emoji:m.emoji,color:m.color,feeType:m.feeType||"none",feePercent:String(m.feePercent||""),feeFixed:String(m.feeFixed||""),isCustom:m.isCustom})}>Edit</button>
+              <div style={{background:m.active?"#5A9E6F":"#721408",border:`1px solid ${m.active?"#5A9E6F":"rgba(250,247,240,0.3)"}`,color:m.active?"#fff":"#FAD5C8",borderRadius:7,padding:"5px 10px",fontSize:12,cursor:"pointer",fontWeight:700}}
+                onClick={()=>togglePaymentMethod(m.id,!m.active)}>{m.active?"On":"Off"}</div>
+            </div>
+          </div>
+        </div>
+      ))}
+      <button style={{...S.btnGhost,marginTop:8}} onClick={()=>setEditingPM({isNew:true,name:"",emoji:"✦",color:"#FAF7F0",feeType:"none",feePercent:"",feeFixed:""})}>+ Add Payment Method</button>
     </div>}
 
     {/* NEW SUB-GOAL */}
