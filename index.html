@@ -1457,6 +1457,107 @@ const EE = () => ({amount:"",note:"",source:"Cash",goalId:"",projectId:"",date:t
 const EX=()=>({name:"",amount:"",category:"Rent",freq:"monthly",startDate:today(),note:"",goalId:null});
 const EP = () => ({name:"",unitCost:"",unit:"pair"});
 
+// Collect all entries (with cart_items) from a goal tree recursively
+function collectEntriesWithCart(goals){
+  const r=[];
+  (goals||[]).forEach(g=>{
+    (g.entries||[]).forEach(en=>{if(en.cart_items)r.push(en);});
+    collectEntriesWithCart(g.subGoals||[]).forEach(x=>r.push(x));
+  });
+  return r;
+}
+// Collect ALL entries (regardless of cart_items) from a goal tree recursively
+function collectAllEntries(goals){
+  const r=[];
+  (goals||[]).forEach(g=>{
+    (g.entries||[]).forEach(en=>r.push(en));
+    collectAllEntries(g.subGoals||[]).forEach(x=>r.push(x));
+  });
+  return r;
+}
+// Total payment-processing fees for a goal + its sub-goals.
+// Fees are snapshotted onto each entry at the time of sale (see calcFee), so this is a
+// straight sum — editing a payment method's rate later does not change past totals.
+function goalFeesTotal(goal) {
+  if(!goal) return 0;
+  const entries=[...(goal.entries||[]), ...collectAllEntries(goal.subGoals||[])];
+  return entries.reduce((s,en)=>s+Number(en.feeAmount||0),0);
+}
+// Total payment-processing fees across an entire project (all goals + sub-goals)
+function projectFeesTotal(proj) {
+  if(!proj) return 0;
+  return collectAllEntries(proj.goals||[]).reduce((s,en)=>s+Number(en.feeAmount||0),0);
+}
+// Build COGS rows from entries + live models + product types (for defaultModelCost fallback)
+function calcCOGS(entries, liveModels, liveProductTypes){
+  const map={};
+  (entries||[]).forEach(en=>{
+    let cart;
+    try{cart=typeof en.cart_items==="string"?JSON.parse(en.cart_items):en.cart_items;}catch(_){return;}
+    if(!Array.isArray(cart)||!cart.length) return;
+    cart.forEach(ci=>{
+      // Find product type by ID first, then by name (handles deleted+recreated types)
+      let pt=(liveProductTypes||[]).find(p=>p.id===ci.typeId);
+      if(!pt&&ci.typeName) pt=(liveProductTypes||[]).find(p=>p.name===ci.typeName);
+      const defCost=pt?Number(pt.defaultModelCost||pt.default_model_cost||0):0;
+      // avg of live model costs — match by resolved type ID OR original typeId
+      const resolvedTypeId=pt?pt.id:ci.typeId;
+      const ptModels=(liveModels||[]).filter(m=>(m.product_type_id===resolvedTypeId||m.product_type_id===ci.typeId)&&Number(m.cost||0)>0);
+      const avgCost=ptModels.length>0?ptModels.reduce((s,m)=>s+Number(m.cost||0),0)/ptModels.length:0;
+      const fallbackCost=defCost>0?defCost:avgCost;
+      // If no models stored at all, use fallbackCost × qty directly
+      if(!ci.models||ci.models.length===0){
+        if(fallbackCost===0) return;
+        const key=en.date+'___'+ci.typeName;
+        if(!map[key]) map[key]={date:en.date,typeName:ci.typeName,qty:0,totalCost:0};
+        map[key].qty+=ci.qty;
+        map[key].totalCost+=fallbackCost*ci.qty;
+        return;
+      }
+      let cost=0;
+      ci.models.forEach(m=>{
+        if(!m){cost+=fallbackCost;return;} // null slot → fallback
+        // 1. stored cost in cart_items
+        const stored=Number(m.cost||0);
+        if(stored>0){cost+=stored;return;}
+        // 2. live model lookup by ID
+        const mid=m.modelId||m.id;
+        const fm=mid?(liveModels||[]).find(x=>x.id===mid):null;
+        const liveCost=fm?Number(fm.cost||0):0;
+        if(liveCost>0){cost+=liveCost;return;}
+        // 3. live model lookup by NAME (handles deleted/recreated models)
+        if(m.name&&m.name!=="—"){
+          const fmByName=(liveModels||[]).find(x=>x.name===m.name&&Number(x.cost||0)>0);
+          if(fmByName){cost+=Number(fmByName.cost);return;}
+        }
+        // 4. fallback (defaultModelCost or avg of type's live models)
+        cost+=fallbackCost;
+      });
+      // Fill any pairs not represented in models array with fallback
+      if(ci.models.length<ci.qty) cost+=(ci.qty-ci.models.length)*fallbackCost;
+      // Only skip if truly no cost info at all
+      if(cost===0&&fallbackCost===0) return;
+      const key=en.date+'___'+ci.typeName;
+      if(!map[key]) map[key]={date:en.date,typeName:ci.typeName,qty:0,totalCost:0};
+      map[key].qty+=ci.qty;
+      map[key].totalCost+=cost;
+    });
+  });
+  return Object.values(map).sort((a,b)=>a.date.localeCompare(b.date)||a.typeName.localeCompare(b.typeName));
+}
+function expCost(exp) {
+  const start=new Date((exp.startDate||today())+"T00:00:00");
+  const now=new Date();now.setHours(0,0,0,0);
+  if(exp.freq==="one-off") return Number(exp.amount);
+  if(exp.freq==="daily") return (Math.max(0,Math.ceil((now-start)/86400000))+1)*Number(exp.amount);
+  if(exp.freq==="weekly") return (Math.max(0,Math.floor((now-start)/604800000))+1)*Number(exp.amount);
+  if(exp.freq==="monthly"){let m=0,c=new Date(start);while(c<=now){m++;c.setMonth(c.getMonth()+1);}return m*Number(exp.amount);}
+  return Number(exp.amount);
+}
+// Sum an array of expense objects (handles both startDate/start_date field naming)
+function sumExpensesArr(expenses) {
+  return (expenses||[]).reduce((s,x)=>s+expCost({...x,startDate:x.startDate||x.start_date}),0);
+}
 function App() {
   const [db, setDb] = useState({projects:[],goals:[],paymentMethods:[]});
   const [view, setView] = useState("dashboard");
@@ -1719,108 +1820,6 @@ function App() {
     const entries = collectEntriesWithCart(proj.goals||[]);
     return calcCOGS(entries, proj.models||[], proj.productTypes||[]).reduce((s,r)=>s+r.totalCost,0);
   }
-// Collect all entries (with cart_items) from a goal tree recursively
-function collectEntriesWithCart(goals){
-  const r=[];
-  (goals||[]).forEach(g=>{
-    (g.entries||[]).forEach(en=>{if(en.cart_items)r.push(en);});
-    collectEntriesWithCart(g.subGoals||[]).forEach(x=>r.push(x));
-  });
-  return r;
-}
-// Collect ALL entries (regardless of cart_items) from a goal tree recursively
-function collectAllEntries(goals){
-  const r=[];
-  (goals||[]).forEach(g=>{
-    (g.entries||[]).forEach(en=>r.push(en));
-    collectAllEntries(g.subGoals||[]).forEach(x=>r.push(x));
-  });
-  return r;
-}
-// Total payment-processing fees for a goal + its sub-goals.
-// Fees are snapshotted onto each entry at the time of sale (see calcFee), so this is a
-// straight sum — editing a payment method's rate later does not change past totals.
-function goalFeesTotal(goal) {
-  if(!goal) return 0;
-  const entries=[...(goal.entries||[]), ...collectAllEntries(goal.subGoals||[])];
-  return entries.reduce((s,en)=>s+Number(en.feeAmount||0),0);
-}
-// Total payment-processing fees across an entire project (all goals + sub-goals)
-function projectFeesTotal(proj) {
-  if(!proj) return 0;
-  return collectAllEntries(proj.goals||[]).reduce((s,en)=>s+Number(en.feeAmount||0),0);
-}
-// Build COGS rows from entries + live models + product types (for defaultModelCost fallback)
-function calcCOGS(entries, liveModels, liveProductTypes){
-  const map={};
-  (entries||[]).forEach(en=>{
-    let cart;
-    try{cart=typeof en.cart_items==="string"?JSON.parse(en.cart_items):en.cart_items;}catch(_){return;}
-    if(!Array.isArray(cart)||!cart.length) return;
-    cart.forEach(ci=>{
-      // Find product type by ID first, then by name (handles deleted+recreated types)
-      let pt=(liveProductTypes||[]).find(p=>p.id===ci.typeId);
-      if(!pt&&ci.typeName) pt=(liveProductTypes||[]).find(p=>p.name===ci.typeName);
-      const defCost=pt?Number(pt.defaultModelCost||pt.default_model_cost||0):0;
-      // avg of live model costs — match by resolved type ID OR original typeId
-      const resolvedTypeId=pt?pt.id:ci.typeId;
-      const ptModels=(liveModels||[]).filter(m=>(m.product_type_id===resolvedTypeId||m.product_type_id===ci.typeId)&&Number(m.cost||0)>0);
-      const avgCost=ptModels.length>0?ptModels.reduce((s,m)=>s+Number(m.cost||0),0)/ptModels.length:0;
-      const fallbackCost=defCost>0?defCost:avgCost;
-      // If no models stored at all, use fallbackCost × qty directly
-      if(!ci.models||ci.models.length===0){
-        if(fallbackCost===0) return;
-        const key=en.date+'___'+ci.typeName;
-        if(!map[key]) map[key]={date:en.date,typeName:ci.typeName,qty:0,totalCost:0};
-        map[key].qty+=ci.qty;
-        map[key].totalCost+=fallbackCost*ci.qty;
-        return;
-      }
-      let cost=0;
-      ci.models.forEach(m=>{
-        if(!m){cost+=fallbackCost;return;} // null slot → fallback
-        // 1. stored cost in cart_items
-        const stored=Number(m.cost||0);
-        if(stored>0){cost+=stored;return;}
-        // 2. live model lookup by ID
-        const mid=m.modelId||m.id;
-        const fm=mid?(liveModels||[]).find(x=>x.id===mid):null;
-        const liveCost=fm?Number(fm.cost||0):0;
-        if(liveCost>0){cost+=liveCost;return;}
-        // 3. live model lookup by NAME (handles deleted/recreated models)
-        if(m.name&&m.name!=="—"){
-          const fmByName=(liveModels||[]).find(x=>x.name===m.name&&Number(x.cost||0)>0);
-          if(fmByName){cost+=Number(fmByName.cost);return;}
-        }
-        // 4. fallback (defaultModelCost or avg of type's live models)
-        cost+=fallbackCost;
-      });
-      // Fill any pairs not represented in models array with fallback
-      if(ci.models.length<ci.qty) cost+=(ci.qty-ci.models.length)*fallbackCost;
-      // Only skip if truly no cost info at all
-      if(cost===0&&fallbackCost===0) return;
-      const key=en.date+'___'+ci.typeName;
-      if(!map[key]) map[key]={date:en.date,typeName:ci.typeName,qty:0,totalCost:0};
-      map[key].qty+=ci.qty;
-      map[key].totalCost+=cost;
-    });
-  });
-  return Object.values(map).sort((a,b)=>a.date.localeCompare(b.date)||a.typeName.localeCompare(b.typeName));
-}
-function expCost(exp) {
-  const start=new Date((exp.startDate||today())+"T00:00:00");
-  const now=new Date();now.setHours(0,0,0,0);
-  if(exp.freq==="one-off") return Number(exp.amount);
-  if(exp.freq==="daily") return (Math.max(0,Math.ceil((now-start)/86400000))+1)*Number(exp.amount);
-  if(exp.freq==="weekly") return (Math.max(0,Math.floor((now-start)/604800000))+1)*Number(exp.amount);
-  if(exp.freq==="monthly"){let m=0,c=new Date(start);while(c<=now){m++;c.setMonth(c.getMonth()+1);}return m*Number(exp.amount);}
-  return Number(exp.amount);
-}
-// Sum an array of expense objects (handles both startDate/start_date field naming)
-function sumExpensesArr(expenses) {
-  return (expenses||[]).reduce((s,x)=>s+expCost({...x,startDate:x.startDate||x.start_date}),0);
-}
-
   function getUserId() {
     try{ return JSON.parse(localStorage.getItem('kasa_session')||'{}').user?.id; } catch{ return null; }
   }
