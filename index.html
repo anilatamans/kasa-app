@@ -1425,7 +1425,7 @@ function App() {
   const [eForm, setEForm] = useState(EE());
   const [xForm, setXForm] = useState(EX());
   const [pForm, setPForm] = useState(EP());
-  const [mod, setMod] = useState({confirm:null,editEntry:null,recur:null,report:null,moveGoal:null});
+  const [mod, setMod] = useState({confirm:null,editEntry:null,recur:null,report:null,moveGoal:null,csvDupConfirm:null});
   const [toast, setToast] = useState(null);
   const [dashTab, setDashTab] = useState("overview");
   const [goalTab, setGoalTab] = useState("entries");
@@ -2108,72 +2108,132 @@ function sumExpensesArr(expenses) {
     const pts=(proj&&proj.productTypes)||[];
     const allMods=(proj&&proj.models)||[];
     const goals=(proj&&proj.goals)||[];
+    // Parse a date string in either YYYY-MM-DD or DD/MM/YYYY (and DD-MM-YYYY) into the
+    // app's internal YYYY-MM-DD format. Falls back to today() if unparseable.
+    function parseImportDate(raw){
+      if(!raw) return today();
+      const s=raw.trim();
+      if(/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+      const m=s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+      if(m) return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;
+      return today();
+    }
+    // Signature used to detect "this looks like the same row already in the app"
+    function sigOf(date,amount,source,ptName,units,modelNames){
+      return [date, Number(amount||0).toFixed(2), (source||'').toLowerCase().trim(), (ptName||'').toLowerCase().trim(), units, (modelNames||[]).map(x=>x.toLowerCase().trim()).sort().join('|')].join('::');
+    }
+    function collectAllEntries(goalsArr){
+      const r=[];
+      (goalsArr||[]).forEach(gl=>{
+        (gl.entries||[]).forEach(en=>r.push(en));
+        collectAllEntries(gl.subGoals||[]).forEach(x=>r.push(x));
+      });
+      return r;
+    }
+    const existingSigs=new Set(collectAllEntries(goals).map(en=>{
+      let cart=null; try{cart=en.cart_items?(typeof en.cart_items==="string"?JSON.parse(en.cart_items):en.cart_items):null;}catch(_){}
+      const ci=Array.isArray(cart)&&cart.length?cart[0]:null;
+      const ptName=ci?ci.typeName:'';
+      const modelNames=ci?(ci.models||[]).filter(Boolean).map(m=>m.name):[];
+      return sigOf(en.date, en.amount, en.source, ptName, en.units||0, modelNames);
+    }));
     const reader=new FileReader();
     reader.onload=e=>{
       const lines=e.target.result.split("\n").filter(l=>l.trim());
       if(lines.length<2){toast_("CSV empty");return;}
       const header=lines[0].split(",").map(h=>h.trim().toLowerCase());
       const col=k=>header.indexOf(k);
-      let added=0;
-      const allCartItemsForStock=[]; // accumulate across all rows, decrement once at the end
+      // Pass 1: parse every row into a plain record (no DB writes yet)
+      const parsedRows=[];
       lines.slice(1).forEach(line=>{
-        // Parse CSV line respecting quoted fields
         const c=[];let cur="",inQ=false;
         for(const ch of line){if(ch==='"'){inQ=!inQ;}else if(ch===','&&!inQ){c.push(cur.trim());cur="";}else{cur+=ch;}}
         c.push(cur.trim());
         const g=i=>i>=0?(c[i]||"").replace(/^"|"$/g,"").trim():"";
-        const date=g(col("date"))||today();
+        const date=parseImportDate(g(col("date")));
         const amount=parseFloat(g(col("amount"))||"0");
         if(!amount) return;
         const source=g(col("source"))||"Cash";
         const note=g(col("note"))||"";
         const ptName=g(col("product_type"));
         const goalName=g(col("goal"));
-        // Find product type by name
-        const pt=ptName?pts.find(p=>p.name.toLowerCase()===ptName.toLowerCase()):null;
-        // Find goal by name
-        let gid_=defaultGoalId||null;
-        if(goalName){
-          const foundGoal=goals.find(g=>g.name.toLowerCase()===goalName.toLowerCase());
-          if(foundGoal) gid_=foundGoal.id;
-        }
-        // Count non-empty model_N columns first — if units field doesn't match, trust the model count
         const modelCols=header.map((h,i)=>h.startsWith("model_")?i:-1).filter(i=>i>=0);
         const filledModelNames=modelCols.map(i=>g(i)).filter(Boolean);
         const declaredUnits=parseInt(g(col("units"))||"1")||1;
         const units=Math.max(declaredUnits,filledModelNames.length,1);
-        const models=modelCols.slice(0,units).map(i=>{
-          const mname=g(i);
-          if(!mname) return null;
-          const m=allMods.find(x=>x.name.toLowerCase()===mname.toLowerCase()&&(!pt||x.product_type_id===pt.id));
-          return m?{modelId:m.id,name:m.name,cost:Number(m.cost||0)}:null;
-        });
-        // Fill remaining pairs with null
-        while(models.length<units) models.push(null);
-        const lineTotal=pt?calcTypePrice({pricing:pt.pricing,unitPrice:pt.unitPrice,bundleTiers:pt.bundleTiers},units):amount;
-        const cartItemsData=pt?[{typeId:pt.id,typeName:pt.name,qty:units,lineTotal,models}]:[];
-        const modelLabels=models.filter(Boolean).map(m=>m.name);
-        const finalNote=note||(pt?`${units}x ${pt.name}`:"")||"";
-        const finalNoteWithModels=modelLabels.length?finalNote+" · "+modelLabels.join(", "):finalNote;
-        const entry={id:gid(),amount,note:finalNoteWithModels,source,date,ts:Date.now(),units,productId:null,cart_items:cartItemsData.length?JSON.stringify(cartItemsData):null};
-        if(gid_){
-          updGoal(gid_,g=>({...g,entries:[...(g.entries||[]),entry].sort((a,b)=>b.date.localeCompare(a.date))}),pid);
-        } else {
-          setDb(d=>({...d,projects:d.projects.map(p=>{
-            if(p.id!==pid) return p;
-            let gen=(p.goals||[]).find(g=>g._general);
-            if(!gen) gen={id:gid(),name:"General",_general:true,target:0,category:"other",period:"monthly",entries:[],subGoals:[],createdAt:Date.now(),createdStr:today(),archived:false};
-            const rest=(p.goals||[]).filter(g=>!g._general);
-            return {...p,goals:[...rest,{...gen,entries:[...(gen.entries||[]),entry].sort((a,b)=>b.date.localeCompare(a.date))}]};
-          })}));
-        }
-        db_.insert("entries",{id:entry.id,user_id:uid,goal_id:gid_||null,project_id:pid,amount,source,note:finalNoteWithModels,date,units,cart_items:entry.cart_items||null}).catch(console.error);
-        if(cartItemsData.length) allCartItemsForStock.push(...cartItemsData);
-        added++;
+        const modelNamesRaw=modelCols.slice(0,units).map(i=>g(i)); // raw names, "" for empty slots
+        const sig=sigOf(date,amount,source,ptName,units,modelNamesRaw.filter(Boolean));
+        parsedRows.push({date,amount,source,note,ptName,goalName,units,modelNamesRaw,isDup:existingSigs.has(sig)});
       });
-      if(allCartItemsForStock.length) decrementStock(pid, allCartItemsForStock);
-      if(added) toast_(`${added} sales imported ✦`);
-      else toast_("No valid rows found in CSV");
+      if(!parsedRows.length){toast_("No valid rows found in CSV");return;}
+      const dupCount=parsedRows.filter(r=>r.isDup).length;
+      function commitRows(rowsToCommit){
+        const newModelsCreated=[]; // models created on-the-fly, persisted once at the end
+        function findOrCreateModel(name, pt){
+          const lname=name.trim().toLowerCase();
+          const ptId=pt?pt.id:null;
+          let m=allMods.find(x=>x.name.trim().toLowerCase()===lname&&(!pt||x.product_type_id===ptId));
+          if(m) return m;
+          m=newModelsCreated.find(x=>x.name.trim().toLowerCase()===lname&&x.product_type_id===ptId);
+          if(m) return m;
+          const defCost=pt?Number(pt.defaultModelCost||pt.default_model_cost||0):0;
+          const newM={id:gid(), name:name.trim(), cost:defCost, product_type_id:ptId, active:true};
+          newModelsCreated.push(newM);
+          return newM;
+        }
+        let added=0;
+        const allCartItemsForStock=[];
+        rowsToCommit.forEach(row=>{
+          const {date,amount,source,note,ptName,goalName,units,modelNamesRaw}=row;
+          const pt=ptName?pts.find(p=>p.name.toLowerCase()===ptName.toLowerCase()):null;
+          let gid_=defaultGoalId||null;
+          if(goalName){
+            const foundGoal=goals.find(g=>g.name.toLowerCase()===goalName.toLowerCase());
+            if(foundGoal) gid_=foundGoal.id;
+          }
+          const models=modelNamesRaw.map(mname=>mname?(()=>{const m=findOrCreateModel(mname,pt);return {modelId:m.id,name:m.name,cost:Number(m.cost||0)};})():null);
+          while(models.length<units) models.push(null);
+          const lineTotal=pt?calcTypePrice({pricing:pt.pricing,unitPrice:pt.unitPrice,bundleTiers:pt.bundleTiers},units):amount;
+          const cartItemsData=pt?[{typeId:pt.id,typeName:pt.name,qty:units,lineTotal,models}]:[];
+          const modelLabels=models.filter(Boolean).map(m=>m.name);
+          const finalNote=note||(pt?`${units}x ${pt.name}`:"")||"";
+          const finalNoteWithModels=modelLabels.length?finalNote+" · "+modelLabels.join(", "):finalNote;
+          const entry={id:gid(),amount,note:finalNoteWithModels,source,date,ts:Date.now(),units,productId:null,cart_items:cartItemsData.length?JSON.stringify(cartItemsData):null};
+          if(gid_){
+            updGoal(gid_,g=>({...g,entries:[...(g.entries||[]),entry].sort((a,b)=>b.date.localeCompare(a.date))}),pid);
+          } else {
+            setDb(d=>({...d,projects:d.projects.map(p=>{
+              if(p.id!==pid) return p;
+              let gen=(p.goals||[]).find(g=>g._general);
+              if(!gen) gen={id:gid(),name:"General",_general:true,target:0,category:"other",period:"monthly",entries:[],subGoals:[],createdAt:Date.now(),createdStr:today(),archived:false};
+              const rest=(p.goals||[]).filter(g=>!g._general);
+              return {...p,goals:[...rest,{...gen,entries:[...(gen.entries||[]),entry].sort((a,b)=>b.date.localeCompare(a.date))}]};
+            })}));
+          }
+          db_.insert("entries",{id:entry.id,user_id:uid,goal_id:gid_||null,project_id:pid,amount,source,note:finalNoteWithModels,date,units,cart_items:entry.cart_items||null}).catch(console.error);
+          if(cartItemsData.length) allCartItemsForStock.push(...cartItemsData);
+          added++;
+        });
+        if(newModelsCreated.length){
+          setDb(d=>({...d,projects:d.projects.map(p=>p.id!==pid?p:{...p,models:[...(p.models||[]),...newModelsCreated]})}));
+          newModelsCreated.forEach(m=>{
+            db_.insert('models',{id:m.id,user_id:uid,project_id:pid,product_type_id:m.product_type_id,name:m.name,cost:m.cost,stock:null,active:true}).catch(console.error);
+          });
+        }
+        if(allCartItemsForStock.length) decrementStock(pid, allCartItemsForStock);
+        if(added) toast_(`${added} sales imported${newModelsCreated.length?`, ${newModelsCreated.length} new models created`:''} ✦`);
+        else toast_("No rows imported");
+      }
+      if(dupCount>0){
+        setMod(m=>({...m,csvDupConfirm:{
+          total:parsedRows.length, dupCount,
+          onProceedAll:()=>{commitRows(parsedRows);setMod(m2=>({...m2,csvDupConfirm:null}));},
+          onSkipDup:()=>{commitRows(parsedRows.filter(r=>!r.isDup));setMod(m2=>({...m2,csvDupConfirm:null}));},
+          onCancel:()=>{setMod(m2=>({...m2,csvDupConfirm:null}));toast_("Import cancelled");}
+        }}));
+      } else {
+        commitRows(parsedRows);
+      }
     };
     reader.readAsText(file);
   }
@@ -2424,6 +2484,18 @@ function sumExpensesArr(expenses) {
       );
     })()}
     {mod.confirm&&<ConfirmModal text={mod.confirm.text} confirmLabel={mod.confirm.confirmLabel} title={mod.confirm.title} onConfirm={mod.confirm.fn} onClose={()=>setMod(m=>({...m,confirm:null}))}/>}
+    {mod.csvDupConfirm&&(()=>{
+      const dc=mod.csvDupConfirm;
+      return <div style={S.overlay}><div style={S.modal}>
+        <div style={{fontSize:17,fontWeight:700,marginBottom:10}}>Possible duplicates found</div>
+        <div style={{fontSize:14,color:"#FAF7F0",marginBottom:18,lineHeight:1.6}}>{dc.dupCount} of {dc.total} row{dc.total!==1?'s':''} in this CSV look identical to entries already in the app (same date, amount, source, product and models). How do you want to proceed?</div>
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          <button style={{...S.btn,background:"#FAF7F0",color:"#8B1A0F"}} onClick={()=>{dc.onSkipDup();}}>Skip {dc.dupCount} duplicate{dc.dupCount!==1?'s':''}, import the rest</button>
+          <button style={{...S.btnGhost}} onClick={()=>{dc.onProceedAll();}}>Import all anyway (creates duplicates)</button>
+          <button style={{...S.btnGhost,borderColor:"#C0392B"}} onClick={()=>{dc.onCancel();}}>Cancel import</button>
+        </div>
+      </div></div>;
+    })()}
     {mod.editEntry&&<EditEntryModal
       entry={mod.editEntry.entry}
       currentGoalId={mod.editEntry.gid_}
