@@ -361,6 +361,13 @@ async function authFetch(path, body) {
 }
 
 // ── DB helpers ────────────────────────────────────────────────
+function queuePending(op) {
+  try {
+    const q = JSON.parse(localStorage.getItem('kasa_pending')||'[]');
+    q.push({...op, ts:Date.now()});
+    localStorage.setItem('kasa_pending', JSON.stringify(q.slice(-300)));
+  } catch{}
+}
 const db_ = {
   async getAll(table) {
     return sbFetch(`/rest/v1/${table}?select=*&order=created_at.asc`);
@@ -374,12 +381,7 @@ const db_ = {
       });
     } catch(e) {
       console.warn('Insert failed for', table, '- will retry on next sync:', e.message);
-      // Store in pending queue
-      try {
-        const q = JSON.parse(localStorage.getItem('kasa_pending')||'[]');
-        q.push({op:'insert',table,data,ts:Date.now()});
-        localStorage.setItem('kasa_pending', JSON.stringify(q.slice(-100)));
-      } catch{}
+      queuePending({op:'insert',table,data});
       throw e;
     }
   },
@@ -391,15 +393,28 @@ const db_ = {
         body: JSON.stringify(data)
       });
     } catch(e) {
-      console.warn('Update failed for', table, id);
+      console.warn('Update failed for', table, id, '- will retry on next sync:', e.message);
+      queuePending({op:'update',table,id,data});
       throw e;
     }
   },
   async delete(table, id) {
-    return sbFetch(`/rest/v1/${table}?id=eq.${id}`, {method: 'DELETE'});
+    try {
+      return await sbFetch(`/rest/v1/${table}?id=eq.${id}`, {method: 'DELETE'});
+    } catch(e) {
+      console.warn('Delete failed for', table, id, '- will retry on next sync:', e.message);
+      queuePending({op:'delete',table,id});
+      throw e;
+    }
   },
   async deleteWhere(table, field, value) {
-    return sbFetch(`/rest/v1/${table}?${field}=eq.${value}`, {method: 'DELETE'});
+    try {
+      return await sbFetch(`/rest/v1/${table}?${field}=eq.${value}`, {method: 'DELETE'});
+    } catch(e) {
+      console.warn('DeleteWhere failed for', table, field, value, '- will retry on next sync:', e.message);
+      queuePending({op:'deleteWhere',table,field,value});
+      throw e;
+    }
   }
 };
 
@@ -551,14 +566,6 @@ function streak(entries=[]) {
 }
 function sumIncome(entries=[]) { return entries.reduce((s,e)=>s+Number(e.amount),0); }
 // ── POS Pricing ──────────────────────────────────────────────
-function calcSockPrice(qty, isPremium) {
-  if(isPremium) return qty * 10;
-  let rem = qty, total = 0;
-  const threes = Math.floor(rem/3); total += threes*20; rem -= threes*3;
-  if(rem===2){total+=15;rem=0;}
-  if(rem===1){total+=8;rem=0;}
-  return total;
-}
 function calcTypePrice(ptype, qty) {
   if(!ptype||qty<=0) return 0;
   if(ptype.pricing==='fixed') return qty*Number(ptype.unitPrice||ptype.unit_price||0);
@@ -570,13 +577,6 @@ function calcTypePrice(ptype, qty) {
   if(rem===2){total+=t2;}else if(rem===1){total+=t1;}
   return total;
 }
-function calcCartTotal(cartItems) {
-  return cartItems.reduce((s,item)=>{
-    const price = item.customPrice !== undefined ? item.customPrice : calcSockPrice(item.qty, item.isPremium);
-    return s + price;
-  }, 0);
-}
-
 function sumGoalTotal(goal) {
   if(!goal) return 0;
   const own = sumIncome(goal.entries||[]);
@@ -920,7 +920,7 @@ function GoalInsights({goal, color, showProj=false, projData=null}) {
         </ISec>
       )}
 
-      {showProj&&projData&&projData.expenses&&projData.expenses.length>0&&(()=>{
+      {showProj&&projData&&(()=>{
         const calcCost = function(exp){
           const start=new Date((exp.startDate||exp.start_date||new Date().toISOString().slice(0,10))+"T00:00:00");
           const n=new Date(); n.setHours(0,0,0,0);
@@ -930,13 +930,18 @@ function GoalInsights({goal, color, showProj=false, projData=null}) {
           if(exp.freq==="monthly"){let mc=0,c=new Date(start);while(c<=n){mc++;c.setMonth(c.getMonth()+1);}return mc*Number(exp.amount);}
           return Number(exp.amount);
         };
-        const totalExp = projData.expenses.reduce((s,e)=>s+calcCost(e),0);
+        const totalExp = (projData.expenses||[]).reduce((s,e)=>s+calcCost(e),0);
         const bycat = {};
-        projData.expenses.forEach(e=>{bycat[e.category]=(bycat[e.category]||0)+calcCost(e);});
-        const margin = total>0?((total-totalExp)/total*100).toFixed(1):null;
+        (projData.expenses||[]).forEach(e=>{bycat[e.category]=(bycat[e.category]||0)+calcCost(e);});
+        const cogsEntries = entries.filter(en=>en.cart_items);
+        const cogsTotal = calcCOGS(cogsEntries, projData.models||[], projData.productTypes||[]).reduce((s,r)=>s+r.totalCost,0);
+        const allCosts = totalExp + cogsTotal;
+        if(allCosts<=0) return null;
+        const margin = total>0?((total-allCosts)/total*100).toFixed(1):null;
         return (
           <ISec title="Expense Summary">
             <SRow label="Total expenses" value={fmtGBP(totalExp)} color="#F87171"/>
+            {cogsTotal>0&&<SRow label="COGS" value={fmtGBP(cogsTotal)} color="#F87171"/>}
             {margin!==null&&<SRow label="Profit margin" value={margin+"%"} color={parseFloat(margin)>=0?"#5A9E6F":"#F87171"}/>}
             {Object.entries(bycat).sort((a,b)=>b[1]-a[1]).map(([cat,v])=>(
               <SRow key={cat} label={cat} value={fmtGBP(v)} color="#FAD5C8"/>
@@ -1013,6 +1018,8 @@ function EditEntryModal({entry, onSave, onClose, availGoals=[], currentGoalId=nu
     return map;
   },[parsedCart]);
   const [editModels, setEditModels] = useState(initModels);
+  // For entries with MULTIPLE cart item types: per-type qty override ({typeId: newQty})
+  const [cartQtyOverrides, setCartQtyOverrides] = useState({});
   // For entries WITHOUT cart_items: manual type + model assignment
   const [manualTypeId, setManualTypeId] = useState("");
   const [manualModels, setManualModels] = useState({});
@@ -1037,19 +1044,21 @@ function EditEntryModal({entry, onSave, onClose, availGoals=[], currentGoalId=nu
         });
         return [{...ci, qty:newQty, models:newModels}];
       }
-      // Multiple cart item types in one entry — keep each type's own qty
-      return parsedCart.map(ci=>({
-        ...ci,
-        models:(ci.models||[]).map((orig,mi)=>{
+      // Multiple cart item types in one entry — each type has its own qty,
+      // adjustable independently via the per-type qty stepper in the UI.
+      return parsedCart.map(ci=>{
+        const newQty=Math.max(1,parseInt(cartQtyOverrides[ci.typeId])||ci.qty||1);
+        const newModels=Array.from({length:newQty},(_,mi)=>{
           const mid=editModels[ci.typeId+'_'+mi];
           if(mid){
             const m=allModels.find(x=>x.id===mid);
             return m?{modelId:m.id,name:m.name,cost:Number(m.cost||0)}:null;
           }
-          // keep original if user didn't change it
-          return orig||null;
-        })
-      }));
+          // keep original if user didn't change it / pair still exists
+          return (ci.models&&ci.models[mi])||null;
+        });
+        return {...ci, qty:newQty, models:newModels};
+      });
     }
     if(manualTypeId){
       const pt=allProductTypes.find(p=>p.id===manualTypeId);
@@ -1091,9 +1100,17 @@ function EditEntryModal({entry, onSave, onClose, availGoals=[], currentGoalId=nu
       <label style={{display:"block",fontSize:11,letterSpacing:1.5,color:"#FAF7F0",textTransform:"uppercase",marginBottom:8,fontWeight:600}}>Models / Modeller</label>
       {parsedCart.map(ci=>{
         const typeModels=allModels.filter(m=>m.product_type_id===ci.typeId&&m.active!==false).sort((a,b)=>a.name.localeCompare(b.name));
-        const displayQty=parsedCart.length===1?Math.max(1,parseInt(e.units)||ci.qty||1):ci.qty;
+        const isMultiType=parsedCart.length>1;
+        const displayQty=isMultiType?Math.max(1,parseInt(cartQtyOverrides[ci.typeId])||ci.qty||1):Math.max(1,parseInt(e.units)||ci.qty||1);
         return <div key={ci.typeId} style={{marginBottom:10,background:"#721408",borderRadius:8,padding:"9px 11px"}}>
-          <div style={{fontSize:12,fontWeight:700,color:"#FAF7F0",marginBottom:6}}>{ci.typeName} × {displayQty}{parsedCart.length===1&&displayQty!==ci.qty&&<span style={{color:"#FAD5C8",fontWeight:400}}> (was {ci.qty})</span>}</div>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
+            <div style={{fontSize:12,fontWeight:700,color:"#FAF7F0"}}>{ci.typeName}{!isMultiType&&<> × {displayQty}</>}{displayQty!==ci.qty&&<span style={{color:"#FAD5C8",fontWeight:400}}> (was {ci.qty})</span>}</div>
+            {isMultiType&&<div style={{display:"flex",alignItems:"center",gap:6}}>
+              <button style={{background:"rgba(250,247,240,0.2)",border:"none",color:"#FAF7F0",width:22,height:22,borderRadius:5,fontSize:13,cursor:"pointer"}} onClick={()=>setCartQtyOverrides(v=>({...v,[ci.typeId]:Math.max(1,displayQty-1)}))}>−</button>
+              <span style={{fontSize:13,fontWeight:700,color:"#FAF7F0",minWidth:16,textAlign:"center"}}>{displayQty}</span>
+              <button style={{background:"rgba(250,247,240,0.2)",border:"none",color:"#FAF7F0",width:22,height:22,borderRadius:5,fontSize:13,cursor:"pointer"}} onClick={()=>setCartQtyOverrides(v=>({...v,[ci.typeId]:displayQty+1}))}>+</button>
+            </div>}
+          </div>
           {Array.from({length:displayQty}).map((_,mi)=>{
             const lineKey=ci.typeId+'_'+mi;
             const storedMid=ci.models&&ci.models[mi]&&(ci.models[mi].modelId||ci.models[mi].id);
@@ -1230,7 +1247,9 @@ function genReport(type, db) {
     const inc=pg.flatMap(g=>g.entries||[]).reduce((s,e)=>s+Number(e.amount),0);
     const ec=(p.expenses||[]).reduce((s,e)=>s+expCost(e),0);
     const pc=(p.products||[]).reduce((s,pr)=>s+prodCost(pr,pg.flatMap(g=>g.entries||[])),0);
-    return {name:p.name,income:inc,expenses:ec+pc,net:inc-ec-pc};
+    const gc=pg.reduce((s,g)=>s+sumExpensesArr(g.expenses),0);
+    const cogs=calcCOGS(collectEntriesWithCart(pg), p.models||[], p.productTypes||[]).reduce((s,r)=>s+r.totalCost,0);
+    return {name:p.name,income:inc,expenses:ec+pc+gc+cogs,net:inc-ec-pc-gc-cogs};
   });
   const totalInc=pf.reduce((s,p)=>s+p.income,0)+db.goals.reduce((s,g)=>s+sumIncome(g.entries),0);
   const totalExp=pf.reduce((s,p)=>s+p.expenses,0);
@@ -1257,9 +1276,10 @@ function NewEntryView({eForm, setEForm, sel, db, sugg, selProj, addEntry, goBack
   try {
   const pid = eForm.projectId||sel.pid;
   const proj = pid ? (db.projects||[]).find(p=>p.id===pid) : null;
-  const prods = (proj ? proj.products||[] : []).filter(Boolean);
+  const ptTypes = (proj ? proj.productTypes||[] : []).filter(Boolean);
+  const allModels = (proj ? proj.models||[] : []).filter(Boolean);
   const goalsList = proj ? (proj.goals||[]).filter(g=>g&&!g._general&&!g.archived) : (db.goals||[]).filter(g=>g&&!g.archived);
-  const prodObj = prods.find(p=>p&&p.id===eForm.productId)||null;
+  const selectedType = ptTypes.find(p=>p&&p.id===eForm.typeId)||null;
   const safeNotes = (sugg&&sugg.notes)||[];
 
   return <div style={S.page}>
@@ -1281,23 +1301,32 @@ function NewEntryView({eForm, setEForm, sel, db, sugg, selProj, addEntry, goBack
         {goalsList.map(g=><Chip key={g.id} active={eForm.goalId===g.id} color="#FAF7F0" onClick={()=>setEForm(v=>({...v,goalId:g.id}))}>{g.name}</Chip>)}
       </div>
     </div>}
-    {prods.length>0&&<div style={S.field}><label style={S.label}>Product Sold (optional)</label>
+    {ptTypes.length>0&&<div style={S.field}><label style={S.label}>Product Sold (optional)</label>
       <div style={S.chipRow}>
-        <Chip active={!eForm.productId} color="#FAF7F0" onClick={()=>setEForm(v=>({...v,productId:null,units:""}))}>None</Chip>
-        {prods.map(p=><Chip key={p.id} active={eForm.productId===p.id} color="#FAF7F0" onClick={()=>setEForm(v=>({...v,productId:p.id}))}>{p.name}</Chip>)}
+        <Chip active={!eForm.typeId} color="#FAF7F0" onClick={()=>setEForm(v=>({...v,typeId:"",units:"",entryModels:{}}))}>None</Chip>
+        {ptTypes.map(pt=><Chip key={pt.id} active={eForm.typeId===pt.id} color="#FAF7F0" onClick={()=>setEForm(v=>({...v,typeId:pt.id}))}>{pt.name}</Chip>)}
       </div>
     </div>}
-    {eForm.productId&&<div style={S.field}><label style={S.label}>Units Sold</label>
+    {eForm.typeId&&<div style={S.field}><label style={S.label}>Units Sold</label>
       <input style={S.input} type="number" placeholder="0" value={eForm.units} onChange={e=>setEForm(v=>({...v,units:e.target.value}))}/>
-      {eForm.units&&prodObj&&<div style={{fontSize:12,color:"#FAF7F0",marginTop:5}}>Suggested: {fmtGBP(calcSockPrice(Number(eForm.units),prodObj.isPremium||prodObj.is_premium))}</div>}
     </div>}
-    {eForm.units&&Number(eForm.units)>0&&<ModelLinesInput
-      count={Math.max(0,Math.min(20,Number(eForm.units)||0))}
-      lines={eForm.modelLines||[]}
-      products={((selProj&&selProj.products)||[]).map(p=>p.name)}
-      onChange={lines=>setEForm(v=>({...v,modelLines:lines}))}
-      inputStyle={S.input}
-    />}
+    {eForm.typeId&&eForm.units&&Number(eForm.units)>0&&(()=>{
+      const units=Math.max(0,Math.min(30,Number(eForm.units)||0));
+      const tModels=allModels.filter(m=>m.product_type_id===eForm.typeId&&m.active!==false).sort((a,b)=>a.name.localeCompare(b.name));
+      if(!tModels.length) return null;
+      return <div style={{marginBottom:14}}>
+        <label style={{display:"block",fontSize:11,letterSpacing:1.5,color:"#FAF7F0",textTransform:"uppercase",marginBottom:6,fontWeight:600}}>Models (optional)</label>
+        {Array.from({length:units}).map((_,mi)=>(
+          <div key={mi} style={{marginBottom:6}}>
+            <div style={{fontSize:10,color:"#FAD5C8",marginBottom:3}}>{selectedType&&selectedType.unit?selectedType.unit:"Pair"} {mi+1}</div>
+            <select style={S.input} value={(eForm.entryModels||{})[mi]||""} onChange={e=>setEForm(v=>({...v,entryModels:{...(v.entryModels||{}),[mi]:e.target.value}}))}>
+              <option value="">— select —</option>
+              {tModels.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+          </div>
+        ))}
+      </div>;
+    })()}
     <div style={S.field}><label style={S.label}>Note (optional)</label>
       <SuggestInput style={S.input} value={eForm.note} onChange={v=>setEForm(f=>({...f,note:v}))} suggestions={safeNotes} placeholder="Market sale, online order..."/>
     </div>
@@ -1315,29 +1344,6 @@ function NewEntryView({eForm, setEForm, sel, db, sugg, selProj, addEntry, goBack
 
 
 // ── Model Lines Input ──
-function ModelLinesInput({count, lines, products, onChange, inputStyle}) {
-  function setLine(i, val) {
-    const next = [...lines];
-    next[i] = val;
-    onChange(next);
-  }
-  return <div style={{marginBottom:14}}>
-    <label style={{display:"block",fontSize:11,letterSpacing:1.5,color:"#FAF7F0",textTransform:"uppercase",marginBottom:6,fontWeight:600}}>Model Details (optional)</label>
-    <div style={{display:"flex",flexDirection:"column",gap:5}}>
-      {Array.from({length:count}).map(function(_,i){
-        var val = lines[i]||"";
-        return <div key={i} style={{marginBottom:2}}>
-          <input style={inputStyle} placeholder={"Pair "+(i+1)+" — model name"} value={val}
-            onChange={function(e){setLine(i,e.target.value);}}/>
-          {products.length>0&&val.length===0&&<div style={{display:"flex",flexWrap:"wrap",gap:3,marginTop:2}}>
-            {products.map(function(p){return <span key={p} style={{background:"#721408",border:"1px solid rgba(250,247,240,0.3)",borderRadius:5,padding:"2px 8px",fontSize:10,color:"#FAF7F0",cursor:"pointer"}} onClick={function(){setLine(i,p);}}>{p}</span>;})}
-          </div>}
-        </div>;
-      })}
-    </div>
-  </div>;
-}
-
 // ── Grouped Entries ──
 function GoalEntriesView({entries, sel, products, setMod, delEntry}) {
   if(!entries.length) return <div style={{color:"#FAF7F0",fontSize:14,textAlign:"center",padding:"22px 0"}}>No entries yet</div>;
@@ -1407,7 +1413,7 @@ function GroupedEntries({groups, onEdit, onDelete, products}) {
 
 // ── MAIN APP ──
 const EG = () => ({name:"",target:"",category:"sales",period:"monthly",dateStart:"",dateEnd:""});
-const EE = () => ({amount:"",note:"",source:"Cash",goalId:"",projectId:"",date:today(),units:"",productId:null,modelLines:[]});
+const EE = () => ({amount:"",note:"",source:"Cash",goalId:"",projectId:"",date:today(),units:"",typeId:"",entryModels:{}});
 const EX=()=>({name:"",amount:"",category:"Rent",freq:"monthly",startDate:today(),note:"",goalId:null});
 const EP = () => ({name:"",unitCost:"",unit:"pair"});
 
@@ -1523,15 +1529,22 @@ function App() {
       const q = JSON.parse(localStorage.getItem('kasa_pending')||'[]');
       if(!q.length) return;
       const remaining = [];
+      let synced=0;
       for(const op of q) {
         try {
-          if(op.op==='insert') await db_.insert(op.table, op.data);
-          else if(op.op==='delete') await db_.delete(op.table, op.id);
+          // Call sbFetch directly — NOT db_.xxx — so a repeat failure doesn't
+          // re-queue a duplicate entry (db_ methods queue on their own failure).
+          if(op.op==='insert') await sbFetch(`/rest/v1/${op.table}`, {method:'POST', headers:{'Prefer':'return=minimal'}, body:JSON.stringify(op.data)});
+          else if(op.op==='update') await sbFetch(`/rest/v1/${op.table}?id=eq.${op.id}`, {method:'PATCH', headers:{'Prefer':'return=minimal'}, body:JSON.stringify(op.data)});
+          else if(op.op==='delete') await sbFetch(`/rest/v1/${op.table}?id=eq.${op.id}`, {method:'DELETE'});
+          else if(op.op==='deleteWhere') await sbFetch(`/rest/v1/${op.table}?${op.field}=eq.${op.value}`, {method:'DELETE'});
+          synced++;
         } catch(e) {
-          remaining.push(op); // keep failed ones
+          remaining.push(op); // keep failed ones for next retry
         }
       }
       localStorage.setItem('kasa_pending', JSON.stringify(remaining));
+      if(synced>0) toast_(`Synced ${synced} pending change${synced!==1?'s':''} ✦`);
     } catch(e) { console.error('Flush failed:', e); }
   }
 
@@ -1599,7 +1612,7 @@ function App() {
         productTypes: (productTypes||[]).filter(pt=>pt.project_id===p.id)
           .sort((a,b)=>(a.sort_order||0)-(b.sort_order||0))
           .map(pt=>({...pt, unitPrice:Number(pt.unit_price||0), bundleTiers:pt.bundle_tiers||null, defaultModelCost:Number(pt.default_model_cost||0)})),
-        models: (models||[]).filter(m=>m.project_id===p.id).map(m=>({...m, cost:Number(m.cost||0)}))
+        models: (models||[]).filter(m=>m.project_id===p.id).map(m=>({...m, cost:Number(m.cost||0), stock:(m.stock===null||m.stock===undefined)?null:Number(m.stock)}))
       };});
 
       const indepGoals = (goals||[]).filter(g=>!g.project_id&&!g.parent_id).map(g=>buildGoal(g,goals||[],expenses||[],entries||[]));
@@ -1615,15 +1628,25 @@ function App() {
 
   function goalExpTotal(goal) {
     if(!goal) return 0;
-    return (goal.expenses||[]).reduce((s,x)=>{
-      const start=new Date((x.startDate||x.start_date||today())+"T00:00:00");
-      const now=new Date(); now.setHours(0,0,0,0);
-      if(x.freq==="one-off") return s+Number(x.amount);
-      if(x.freq==="daily") return s+(Math.max(0,Math.ceil((now-start)/86400000))+1)*Number(x.amount);
-      if(x.freq==="weekly") return s+(Math.max(0,Math.floor((now-start)/604800000))+1)*Number(x.amount);
-      if(x.freq==="monthly"){let mc=0,c=new Date(start);while(c<=now){mc++;c.setMonth(c.getMonth()+1);}return s+mc*Number(x.amount);}
-      return s+Number(x.amount);
-    },0);
+    return sumExpensesArr(goal.expenses);
+  }
+  // Total Cost of Goods Sold for a goal + its sub-goals (uses live models/types of its project)
+  function goalCOGSTotal(goal, pid=null) {
+    if(!goal) return 0;
+    const proj = pid ? db.projects.find(p=>p.id===pid) : null;
+    const liveModels = proj ? (proj.models||[]) : [];
+    const liveTypes = proj ? (proj.productTypes||[]) : [];
+    const entries = [
+      ...(goal.entries||[]).filter(en=>en.cart_items),
+      ...collectEntriesWithCart(goal.subGoals||[])
+    ];
+    return calcCOGS(entries, liveModels, liveTypes).reduce((s,r)=>s+r.totalCost,0);
+  }
+  // Total COGS across an entire project (all goals + sub-goals)
+  function projectCOGSTotal(proj) {
+    if(!proj) return 0;
+    const entries = collectEntriesWithCart(proj.goals||[]);
+    return calcCOGS(entries, proj.models||[], proj.productTypes||[]).reduce((s,r)=>s+r.totalCost,0);
   }
 // Collect all entries (with cart_items) from a goal tree recursively
 function collectEntriesWithCart(goals){
@@ -1700,6 +1723,10 @@ function expCost(exp) {
   if(exp.freq==="monthly"){let m=0,c=new Date(start);while(c<=now){m++;c.setMonth(c.getMonth()+1);}return m*Number(exp.amount);}
   return Number(exp.amount);
 }
+// Sum an array of expense objects (handles both startDate/start_date field naming)
+function sumExpensesArr(expenses) {
+  return (expenses||[]).reduce((s,x)=>s+expCost({...x,startDate:x.startDate||x.start_date}),0);
+}
 
   function getUserId() {
     try{ return JSON.parse(localStorage.getItem('kasa_session')||'{}').user?.id; } catch{ return null; }
@@ -1752,13 +1779,28 @@ function expCost(exp) {
   }
   function addEntry() {
     const f=eForm; if(!f.amount) return;
-    // Build note with model lines
-    const modelLines=(f.modelLines||[]).filter(l=>l.trim());
-    const noteWithModels = modelLines.length>0
-      ? (f.note?f.note+" · ":"")+modelLines.join(", ")
-      : f.note||"";
-    const entry={id:gid(),amount:parseFloat(f.amount),note:noteWithModels,source:f.source,date:f.date||today(),ts:Date.now(),units:f.units?parseFloat(f.units):0,productId:f.productId||null};
     const pid=f.projectId||sel.pid||null;
+    const proj = pid ? db.projects.find(p=>p.id===pid) : null;
+    const pt = (proj&&f.typeId) ? (proj.productTypes||[]).find(p=>p.id===f.typeId) : null;
+    // Build cart_items (consistent {modelId,name,cost} shape) when a product type + units are set
+    let cartItemsData=null, finalNote=f.note||"";
+    if(pt && f.units && Number(f.units)>0){
+      const units=Math.max(1,parseInt(f.units)||1);
+      const defCost=Number(pt.defaultModelCost||pt.default_model_cost||0);
+      const typeModels=(proj.models||[]).filter(m=>m.product_type_id===pt.id&&Number(m.cost||0)>0);
+      const avgCost=typeModels.length>0?typeModels.reduce((s,m)=>s+Number(m.cost||0),0)/typeModels.length:0;
+      const fallbackCost=defCost>0?defCost:avgCost;
+      const models=Array.from({length:units},(_,mi)=>{
+        const mid=(f.entryModels||{})[mi];
+        const m=mid?(proj.models||[]).find(x=>x.id===mid):null;
+        return m?{modelId:m.id,name:m.name,cost:Number(m.cost||0)>0?Number(m.cost):fallbackCost}:null;
+      });
+      cartItemsData=[{typeId:pt.id,typeName:pt.name,qty:units,lineTotal:parseFloat(f.amount)||0,models}];
+      const modelLabels=models.filter(Boolean).map(m=>m.name);
+      const baseNote=f.note||`${units}x ${pt.name}`;
+      finalNote=modelLabels.length?baseNote+" · "+modelLabels.join(", "):baseNote;
+    }
+    const entry={id:gid(),amount:parseFloat(f.amount),note:finalNote,source:f.source,date:f.date||today(),ts:Date.now(),units:f.units?parseFloat(f.units):0,productId:null,cart_items:cartItemsData?JSON.stringify(cartItemsData):null};
     if(f.goalId) {
       updGoal(f.goalId, g=>({...g,entries:[...(g.entries||[]),entry].sort((a,b)=>b.date.localeCompare(a.date))}), pid);
     } else if(pid) {
@@ -1774,18 +1816,8 @@ function expCost(exp) {
     if(uid){
       const goalId=f.goalId||sel.gid_||null;
       const projId=f.projectId||sel.pid||null;
-      db_.insert("entries",{id:entry.id,user_id:uid,goal_id:goalId,project_id:projId,amount:entry.amount,source:entry.source||"Cash",note:entry.note||null,date:entry.date||today(),units:entry.units||0,is_recurring:false}).catch(e=>console.error("Entry save failed:",e));
-      // Auto-save new model names as products
-      if(projId&&modelLines.length>0){
-        const existingNames=(selProj&&selProj.products||[]).map(p=>p.name.toLowerCase());
-        modelLines.forEach(modelName=>{
-          if(!existingNames.includes(modelName.toLowerCase())){
-            const newProd={id:gid(),name:modelName,unitCost:8,unit:"pair",isPremium:false,unit_cost:8,is_premium:false};
-            setDb(d=>({...d,projects:d.projects.map(p=>p.id===projId?{...p,products:[...(p.products||[]),newProd]}:p)}));
-            db_.insert("products",{id:newProd.id,user_id:uid,project_id:projId,name:modelName,unit_cost:8,unit:"pair",is_premium:false}).catch(console.error);
-          }
-        });
-      }
+      db_.insert("entries",{id:entry.id,user_id:uid,goal_id:goalId,project_id:projId,amount:entry.amount,source:entry.source||"Cash",note:entry.note||null,date:entry.date||today(),units:entry.units||0,is_recurring:false,cart_items:entry.cart_items||null}).catch(e=>console.error("Entry save failed:",e));
+      if(cartItemsData) decrementStock(projId, cartItemsData);
     }
     setEForm(EE()); setView(sel.gid_?"goal":sel.pid?"project":"dashboard"); toast_("Income added ✦");
   }
@@ -1836,15 +1868,45 @@ function expCost(exp) {
   // ── Models CRUD ─────────────────────────────────────────────
   function addModel(pid, m) {
     const uid=getUserId(); if(!uid||!pid) return;
-    const newM={...m, id:m.id||gid(), cost:Number(m.cost||0), active:true};
+    const stockVal=(m.stock===""||m.stock===null||m.stock===undefined)?null:Number(m.stock);
+    const newM={...m, id:m.id||gid(), cost:Number(m.cost||0), stock:stockVal, active:true};
     setDb(d=>({...d,projects:d.projects.map(p=>p.id!==pid?p:{...p,models:[...(p.models||[]),newM]})}));
-    db_.insert('models',{id:newM.id,user_id:uid,project_id:pid,product_type_id:newM.product_type_id||null,name:newM.name,cost:newM.cost,active:true}).catch(console.error);
+    db_.insert('models',{id:newM.id,user_id:uid,project_id:pid,product_type_id:newM.product_type_id||null,name:newM.name,cost:newM.cost,stock:stockVal,active:true}).catch(console.error);
     toast_("Model added ✦");
   }
   function updateModel(pid, mId, updates) {
-    setDb(d=>({...d,projects:d.projects.map(p=>p.id!==pid?p:{...p,models:(p.models||[]).map(m=>m.id===mId?{...m,...updates}:m)})}));
-    db_.update('models',mId,{name:updates.name,cost:Number(updates.cost||0),product_type_id:updates.product_type_id||null,active:updates.active!==false}).catch(console.error);
+    const stockVal=(updates.stock===""||updates.stock===null||updates.stock===undefined)?null:Number(updates.stock);
+    setDb(d=>({...d,projects:d.projects.map(p=>p.id!==pid?p:{...p,models:(p.models||[]).map(m=>m.id===mId?{...m,...updates,stock:stockVal}:m)})}));
+    db_.update('models',mId,{name:updates.name,cost:Number(updates.cost||0),product_type_id:updates.product_type_id||null,active:updates.active!==false,stock:stockVal}).catch(console.error);
     toast_("Saved ✦");
+  }
+  // Decrement stock for each model used in a cart_items array (after a sale)
+  function decrementStock(pid, cartItemsArr) {
+    if(!pid||!Array.isArray(cartItemsArr)) return;
+    const counts={};
+    cartItemsArr.forEach(ci=>{
+      (ci.models||[]).forEach(m=>{
+        const mid=m&&(m.modelId||m.id);
+        if(mid) counts[mid]=(counts[mid]||0)+1;
+      });
+    });
+    if(!Object.keys(counts).length) return;
+    const proj=db.projects.find(p=>p.id===pid);
+    if(!proj) return;
+    const toPersist=[]; // [{id, newStock}]
+    (proj.models||[]).forEach(m=>{
+      if(!counts[m.id]||m.stock===null||m.stock===undefined) return;
+      toPersist.push({id:m.id, newStock:Number(m.stock)-counts[m.id]});
+    });
+    if(!toPersist.length) return;
+    setDb(d=>({...d,projects:d.projects.map(p=>{
+      if(p.id!==pid) return p;
+      return {...p,models:(p.models||[]).map(m=>{
+        const found=toPersist.find(x=>x.id===m.id);
+        return found?{...m,stock:found.newStock}:m;
+      })};
+    })}));
+    toPersist.forEach(x=>{ db_.update('models',x.id,{stock:x.newStock}).catch(console.error); });
   }
   function delModel(pid, mId) {
     setDb(d=>({...d,projects:d.projects.map(p=>p.id!==pid?p:{...p,models:(p.models||[]).filter(m=>m.id!==mId)})}));
@@ -2053,6 +2115,7 @@ function expCost(exp) {
       const header=lines[0].split(",").map(h=>h.trim().toLowerCase());
       const col=k=>header.indexOf(k);
       let added=0;
+      const allCartItemsForStock=[]; // accumulate across all rows, decrement once at the end
       lines.slice(1).forEach(line=>{
         // Parse CSV line respecting quoted fields
         const c=[];let cur="",inQ=false;
@@ -2105,8 +2168,10 @@ function expCost(exp) {
           })}));
         }
         db_.insert("entries",{id:entry.id,user_id:uid,goal_id:gid_||null,project_id:pid,amount,source,note:finalNoteWithModels,date,units,cart_items:entry.cart_items||null}).catch(console.error);
+        if(cartItemsData.length) allCartItemsForStock.push(...cartItemsData);
         added++;
       });
+      if(allCartItemsForStock.length) decrementStock(pid, allCartItemsForStock);
       if(added) toast_(`${added} sales imported ✦`);
       else toast_("No valid rows found in CSV");
     };
@@ -2172,7 +2237,8 @@ function expCost(exp) {
   function GCard({goal, pid=null}) {
     const grossIncome=sumGoalTotal(goal);
     const expTotal=goalExpTotal(goal);
-    const earned=grossIncome-expTotal;
+    const cogsTotal=goalCOGSTotal(goal,pid);
+    const earned=grossIncome-expTotal-cogsTotal;
     const pct=Math.min(100,(earned/Math.max(goal.target,1))*100);
     const c=(CAT[goal.category]||CAT.other).color;
     const s=streak(goal.entries);
@@ -2486,7 +2552,7 @@ function expCost(exp) {
               const mid=posModelLines[item.typeId+'_'+mi];
               if(!mid) return null;
               const m=allModels.find(m=>m.id===mid);
-              return m?{modelId:m.id,name:m.name,cost:m.cost}:null;
+              return m?{modelId:m.id,name:m.name,cost:Number(m.cost||0)}:null;
             });
             return {typeId:item.typeId,typeName:item.typeName,qty:item.qty,lineTotal,models};
           });
@@ -2513,6 +2579,7 @@ function expCost(exp) {
             })}));
           }
           if(uid) db_.insert("entries",{id:entry.id,user_id:uid,goal_id:targetGoalId||null,project_id:pid,amount:finalTotal,source:posPayment,note:finalNoteStr,date:posDate||today(),units:totalUnits,cart_items:JSON.stringify(cartItemsData)}).catch(console.error);
+          decrementStock(pid, cartItemsData);
           setPosMode(false); setCart([]); setPosModelLines({}); toast_(`Sale saved — ${fmtGBP(finalTotal)} ✦`);
         }
 
@@ -2590,7 +2657,7 @@ function expCost(exp) {
                                 value={selMid}
                                 onChange={e=>setPosModelLines(v=>({...v,[lineKey]:e.target.value}))}>
                                 <option value="">— select —</option>
-                                {typeModels.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}
+                                {typeModels.map(m=><option key={m.id} value={m.id}>{m.name}{(m.stock!==null&&m.stock!==undefined)?(Number(m.stock)<0?` (${m.stock})`:Number(m.stock)===0?" — out of stock":` (${m.stock} left)`):""}</option>)}
                               </select>
                               {selMid&&<span style={{background:"rgba(250,247,240,0.12)",border:"1px solid rgba(250,247,240,0.3)",borderRadius:6,padding:"5px 8px",fontSize:13,color:"#FAD5C8",cursor:"pointer",lineHeight:1}} title="Clear selection" onClick={()=>setPosModelLines(v=>{const n={...v};delete n[lineKey];return n;})}>×</span>}
                               <span style={{background:"rgba(250,247,240,0.08)",border:"1px dashed rgba(250,247,240,0.4)",borderRadius:6,padding:"5px 9px",fontSize:11,color:"#FAD5C8",cursor:"pointer",whiteSpace:"nowrap"}} onClick={()=>{setPosNewModelKey(lineKey);setPosNewModelName("");}}>+ New</span>
@@ -2734,7 +2801,8 @@ function expCost(exp) {
             const ec=(p.expenses||[]).reduce((s,e)=>s+expCost(e),0);
             const pc=(p.products||[]).reduce((s,pr)=>s+prodCost(pr,allE),0);
             const gc=pg.reduce((s,g)=>s+goalExpTotal(g),0);
-            const net=inc-ec-pc-gc;
+            const cogs=projectCOGSTotal(p);
+            const net=inc-ec-pc-gc-cogs;
             return <div key={p.id} style={{...S.card,cursor:"pointer"}} className="hov" onClick={()=>goPrj(p.id)}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                 <div>
@@ -2785,12 +2853,13 @@ function expCost(exp) {
       const ec=(selProj.expenses||[]).reduce((s,e)=>s+expCost(e),0);
       const pc=(selProj.products||[]).reduce((s,pr)=>s+prodCost(pr,allE),0);
       const gc=(selProj.goals||[]).reduce((s,g)=>s+goalExpTotal(g),0);
-      const net=inc-ec-pc-gc;
+      const cogs=projectCOGSTotal(selProj);
+      const net=inc-ec-pc-gc-cogs;
       return <div style={S.page}>
         <div style={S.card}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div style={{fontSize:20,fontWeight:700}}>{selProj.name}</div><button style={{background:"rgba(250,247,240,0.15)",border:"1px solid #FAF7F0",color:"#FAF7F0",borderRadius:5,fontSize:11,cursor:"pointer",padding:"4px 9px"}} onClick={()=>setEditingProj({pid:selProj.id,name:selProj.name})}>Edit</button></div>
           <div style={{display:"flex",gap:14,marginTop:10,flexWrap:"wrap"}}>
-            {[{l:"Income",v:fmtGBP(inc),c:"#FAF7F0"},{l:"Expenses",v:fmtGBP(ec+pc+gc),c:"#E07840"},{l:"Net",v:fmtGBP(net),c:net>=0?"#5A9E6F":"#E07840"}].map(({l,v,c})=><div key={l}><div style={{fontSize:13,fontWeight:500,color:"#FAF7F0",letterSpacing:2,textTransform:"uppercase"}}>{l}</div><div style={{fontSize:18,fontWeight:700,color:c,marginTop:1}}>{v}</div></div>)}
+            {[{l:"Income",v:fmtGBP(inc),c:"#FAF7F0"},{l:"Expenses",v:fmtGBP(ec+pc+gc+cogs),c:"#E07840"},{l:"Net",v:fmtGBP(net),c:net>=0?"#5A9E6F":"#E07840"}].map(({l,v,c})=><div key={l}><div style={{fontSize:13,fontWeight:500,color:"#FAF7F0",letterSpacing:2,textTransform:"uppercase"}}>{l}</div><div style={{fontSize:18,fontWeight:700,color:c,marginTop:1}}>{v}</div></div>)}
           </div>
         </div>
         <Tabs tabs={["goals","income","expenses","products","insights"]} active={projTab} onChange={setProjTab}/>
@@ -3002,18 +3071,22 @@ function expCost(exp) {
                 return <div key={m.id} style={{background:"rgba(0,0,0,0.2)",borderRadius:10,padding:11,marginBottom:7}}>
                   <input style={{...inpSt,marginBottom:7}} placeholder="Model name (e.g. donut worry)" value={em.name} onChange={e=>setEditingModel(v=>({...v,m:{...v.m,name:e.target.value}}))}/>
                   <input type="number" style={{...inpSt,marginBottom:7}} placeholder="Cost (£)" value={em.cost} onChange={e=>setEditingModel(v=>({...v,m:{...v.m,cost:e.target.value}}))}/>
-                  <select style={{...inpSt,marginBottom:8}} value={em.product_type_id||""} onChange={e=>setEditingModel(v=>({...v,m:{...v.m,product_type_id:e.target.value}}))}><option value="">No type</option>{pts.map(pt=><option key={pt.id} value={pt.id}>{pt.name}</option>)}</select>
+                  <select style={{...inpSt,marginBottom:7}} value={em.product_type_id||""} onChange={e=>setEditingModel(v=>({...v,m:{...v.m,product_type_id:e.target.value}}))}><option value="">No type</option>{pts.map(pt=><option key={pt.id} value={pt.id}>{pt.name}</option>)}</select>
+                  <input type="number" style={{...inpSt,marginBottom:8}} placeholder="Stock (optional, leave blank to not track)" value={em.stock===null||em.stock===undefined?"":em.stock} onChange={e=>setEditingModel(v=>({...v,m:{...v.m,stock:e.target.value}}))}/>
                   <div style={{display:"flex",gap:6}}>
                     <button style={{flex:1,background:"transparent",border:"1px solid #FAF7F0",color:"#FAF7F0",borderRadius:8,padding:"8px",fontSize:12,cursor:"pointer"}} onClick={()=>setEditingModel(null)}>Cancel</button>
-                    <button style={{flex:1,background:"#FAF7F0",color:"#8B1A0F",border:"none",borderRadius:8,padding:"8px",fontSize:12,fontWeight:700,cursor:"pointer"}} onClick={()=>{if(!em.name) return;updateModel(selProj.id,em.id,{name:em.name,cost:Number(em.cost||0),product_type_id:em.product_type_id||null,active:em.active!==false});setEditingModel(null);}}>Save</button>
+                    <button style={{flex:1,background:"#FAF7F0",color:"#8B1A0F",border:"none",borderRadius:8,padding:"8px",fontSize:12,fontWeight:700,cursor:"pointer"}} onClick={()=>{if(!em.name) return;updateModel(selProj.id,em.id,{name:em.name,cost:Number(em.cost||0),product_type_id:em.product_type_id||null,active:em.active!==false,stock:em.stock});setEditingModel(null);}}>Save</button>
                   </div>
                 </div>;
               }
+              const stockKnown=m.stock!==null&&m.stock!==undefined;
+              const lowStock=stockKnown&&Number(m.stock)<=2;
               return <div key={m.id} style={{...S.entryRow,marginBottom:5}}>
                 <div style={{flex:1}}>
                   <div style={{fontSize:13,fontWeight:500,color:"#FAF7F0"}}>{m.name}</div>
                   {ptName&&<div style={{fontSize:11,color:"rgba(250,247,240,0.55)",marginTop:1}}>{ptName}{m.cost>0?` · £${Number(m.cost).toFixed(2)} cost`:""}</div>}
                 </div>
+                {stockKnown&&<span style={{fontSize:10,color:lowStock?"#F87171":"rgba(250,247,240,0.6)",marginRight:6,fontWeight:lowStock?700:400}}>{Number(m.stock)<0?m.stock:Number(m.stock)===0?"Out of stock":`${m.stock} left`}</span>}
                 {!m.active&&<span style={{fontSize:10,color:"rgba(250,247,240,0.4)",marginRight:6}}>inactive</span>}
                 <button style={btnSm} onClick={()=>setEditingModel({pid:selProj.id,isNew:false,m:{...m}})}>Edit</button>
                 <button style={{...btnSm,marginLeft:4,opacity:0.5}} onClick={()=>setMod(m2=>({...m2,confirm:{text:`Delete model "${m.name}"?`,fn:()=>delModel(selProj.id,m.id)}}))}>×</button>
@@ -3025,11 +3098,12 @@ function expCost(exp) {
               return <div style={{background:"rgba(0,0,0,0.2)",borderRadius:10,padding:11,marginBottom:7}}>
                 <input style={{...inpSt,marginBottom:7}} placeholder="Model name (e.g. fuck off)" value={em.name} onChange={e=>setEditingModel(v=>({...v,m:{...v.m,name:e.target.value}}))}/>
                 <select style={{...inpSt,marginBottom:7}} value={em.product_type_id||""} onChange={e=>{const pt=pts.find(p=>p.id===e.target.value);setEditingModel(v=>({...v,m:{...v.m,product_type_id:e.target.value,cost:pt?Number(pt.defaultModelCost||0):v.m.cost}}));}}><option value="">No type</option>{pts.map(pt=><option key={pt.id} value={pt.id}>{pt.name}</option>)}</select>
-                <input type="number" style={{...inpSt,marginBottom:8}} placeholder="Cost per unit (£)" value={em.cost||""} onChange={e=>setEditingModel(v=>({...v,m:{...v.m,cost:e.target.value}}))}/>
+                <input type="number" style={{...inpSt,marginBottom:7}} placeholder="Cost per unit (£)" value={em.cost||""} onChange={e=>setEditingModel(v=>({...v,m:{...v.m,cost:e.target.value}}))}/>
+                <input type="number" style={{...inpSt,marginBottom:8}} placeholder="Stock (optional, leave blank to not track)" value={em.stock===null||em.stock===undefined?"":em.stock} onChange={e=>setEditingModel(v=>({...v,m:{...v.m,stock:e.target.value}}))}/>
 
                 <div style={{display:"flex",gap:6}}>
                   <button style={{flex:1,background:"transparent",border:"1px solid #FAF7F0",color:"#FAF7F0",borderRadius:8,padding:"8px",fontSize:12,cursor:"pointer"}} onClick={()=>setEditingModel(null)}>Cancel</button>
-                  <button style={{flex:1,background:"#FAF7F0",color:"#8B1A0F",border:"none",borderRadius:8,padding:"8px",fontSize:12,fontWeight:700,cursor:"pointer"}} onClick={()=>{if(!em.name) return;addModel(selProj.id,{name:em.name,cost:Number(em.cost||0),product_type_id:em.product_type_id||null,active:true});setEditingModel(null);}}>Add Model</button>
+                  <button style={{flex:1,background:"#FAF7F0",color:"#8B1A0F",border:"none",borderRadius:8,padding:"8px",fontSize:12,fontWeight:700,cursor:"pointer"}} onClick={()=>{if(!em.name) return;addModel(selProj.id,{name:em.name,cost:Number(em.cost||0),product_type_id:em.product_type_id||null,active:true,stock:em.stock});setEditingModel(null);}}>Add Model</button>
                 </div>
               </div>;
             })()}
@@ -3045,7 +3119,9 @@ function expCost(exp) {
     {/* GOAL */}
     {view==="goal"&&selGoal&&(()=>{
       const grossInc=sumGoalTotal(selGoal);
-      const goalExp=goalExpTotal(selGoal);
+      const goalExpOnly=goalExpTotal(selGoal);
+      const goalCogs=goalCOGSTotal(selGoal,sel.pid);
+      const goalExp=goalExpOnly+goalCogs;
       const earned=grossInc-goalExp;
       const pct=Math.min(100,(earned/Math.max(selGoal.target,1))*100);
       const c=selCfg.color;
@@ -3058,7 +3134,7 @@ function expCost(exp) {
           {goalExp>0
             ?<div style={{display:"flex",gap:16,marginBottom:selGoal._general?0:6,flexWrap:"wrap"}}>
               <div><div style={{fontSize:10,letterSpacing:1.5,color:"#FAD5C8",textTransform:"uppercase"}}>Income</div><div style={{fontSize:22,fontWeight:700,color:c}}>{fmtGBP(grossInc)}</div></div>
-              <div><div style={{fontSize:10,letterSpacing:1.5,color:"#FAD5C8",textTransform:"uppercase"}}>Expenses</div><div style={{fontSize:22,fontWeight:700,color:"#F87171"}}>−{fmtGBP(goalExp)}</div></div>
+              <div><div style={{fontSize:10,letterSpacing:1.5,color:"#FAD5C8",textTransform:"uppercase"}}>Expenses{goalCogs>0?" + COGS":""}</div><div style={{fontSize:22,fontWeight:700,color:"#F87171"}}>−{fmtGBP(goalExp)}</div></div>
               <div><div style={{fontSize:10,letterSpacing:1.5,color:"#FAD5C8",textTransform:"uppercase"}}>Net</div><div style={{fontSize:22,fontWeight:700,color:earned>=0?c:"#F87171"}}>{fmtGBP(earned)}</div></div>
             </div>
             :<div style={{fontSize:34,fontWeight:700,color:c,lineHeight:1,marginBottom:selGoal._general?0:6}}>{fmtGBP(earned)}</div>
@@ -3369,23 +3445,6 @@ function expCost(exp) {
     </div>}
 
     {/* NEW PRODUCT */}
-    {view==="newProduct"&&selProj&&<div style={S.page}>
-      <div style={{fontSize:19,fontWeight:700,marginBottom:18,letterSpacing:1.5}}>Add Product · {selProj.name}</div>
-      <div style={S.field}><label style={S.label}>Product Name</label>
-        <SuggestInput style={S.input} value={pForm.name} onChange={v=>setPForm(f=>({...f,name:v}))} suggestions={sugg.prodNames} placeholder="Socks, T-shirt..."/>
-      </div>
-      <div style={S.field}><label style={S.label}>Unit Cost (£)</label><input style={S.input} type="number" placeholder="3.50" value={pForm.unitCost} onChange={e=>setPForm(v=>({...v,unitCost:e.target.value}))}/></div>
-      <div style={S.field}><label style={S.label}>Unit Label</label><input style={S.input} placeholder="pair, item, box..." value={pForm.unit} onChange={e=>setPForm(v=>({...v,unit:e.target.value}))}/></div>
-      <div style={S.field}>
-        <label style={S.label}>Type</label>
-        <div style={S.chipRow}>
-          <Chip active={!pForm.isPremium} color="#FAF7F0" onClick={()=>setPForm(v=>({...v,isPremium:false}))}>Standard (£8/£15/£20)</Chip>
-          <Chip active={pForm.isPremium} color="#FFD700" onClick={()=>setPForm(v=>({...v,isPremium:true}))}>★ Premium (£10)</Chip>
-        </div>
-      </div>
-      <button style={{...S.btn,opacity:(!pForm.name||!pForm.unitCost)?0.4:1}} onClick={()=>addProduct(sel.pid)}>Add Product</button>
-    </div>}
-
     {/* REPORTS */}
     {view==="reports"&&<div style={S.page}>
       <div style={{fontSize:19,fontWeight:700,marginBottom:18,letterSpacing:1.5}}>Reports</div>
