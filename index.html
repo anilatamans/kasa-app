@@ -3108,6 +3108,11 @@ function sumExpensesArr(expenses) {
           const allE2=(selProj.goals||[]).flatMap(g=>g.entries||[]).sort((a,b)=>b.date.localeCompare(a.date));
           const srcMap={"Cash":{emoji:"💵",color:"#5A9E6F"},"Square":{emoji:"◾",color:"#00B9C6"},"Shopify":{emoji:"🛒",color:"#96BF48"},"Online":{emoji:"🌐",color:"#7B9CFF"},"In-person":{emoji:"🤝",color:"#FAF7F0"},"Transfer":{emoji:"↔️",color:"#F87171"},"Other":{emoji:"✦",color:"#A0A0A0"}};
           return <>
+            <input ref={el=>importSalesRef.current=el} type="file" accept=".csv" style={{display:"none"}} onChange={e=>{const f=e.target.files[0];if(f){importSalesCSV(f,selProj.id,null);e.target.value='';}}}/>
+            <div style={{display:"flex",gap:6,marginBottom:10}}>
+              <button style={{background:"rgba(250,247,240,0.15)",border:"1px solid rgba(250,247,240,0.4)",color:"#FAF7F0",borderRadius:6,fontSize:11,cursor:"pointer",padding:"3px 8px"}} onClick={()=>downloadSalesTemplate(selProj.id)}>↓ CSV Template</button>
+              <button style={{background:"rgba(250,247,240,0.15)",border:"1px solid rgba(250,247,240,0.4)",color:"#FAF7F0",borderRadius:6,fontSize:11,cursor:"pointer",padding:"3px 8px"}} onClick={()=>importSalesRef.current&&importSalesRef.current.click()}>↑ Import CSV (all goals)</button>
+            </div>
             {allE2.length===0
               ?<div style={{color:"#FAD5C8",fontSize:13,textAlign:"center",padding:"24px 0"}}>No income yet</div>
               :<>
