@@ -328,6 +328,7 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.3); cur
 </head>
 <body>
 <div id="root"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script type="text/babel">
 // ── Supabase Client ──────────────────────────────────────────
 const SUPABASE_URL = "https://zqzitszozhxqmkdeeshj.supabase.co";
@@ -1269,7 +1270,7 @@ function ReportModal({content, type, onDownload, onClose}) {
       <button style={{background:"none",border:"none",color:"#FAF7F0",fontSize:22,cursor:"pointer"}} onClick={onClose}>×</button>
     </div>
     <pre style={{fontSize:12,color:"#FAF7F0",whiteSpace:"pre-wrap",maxHeight:300,overflowY:"auto",background:"#721408",padding:11,borderRadius:8,marginBottom:12}}>{content}</pre>
-    <button style={S.btn} onClick={onDownload}>Download .txt</button>
+    <button style={S.btn} onClick={onDownload}>Download .xlsx</button>
   </div></div>;
 }
 
@@ -1302,6 +1303,85 @@ function genReport(type, db) {
 function dlReport(type, db) {
   const c=genReport(type,db);
   const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([c],{type:"text/plain"}));a.download=`kasa_${type}.txt`;a.click();
+}
+// Build the same figures as genReport(), but as rows (array-of-arrays) suitable for a spreadsheet.
+function buildReportRows(type, db) {
+  function flattenGoals(goals){const r=[];(goals||[]).forEach(g=>{r.push(g);flattenGoals(g.subGoals||[]).forEach(sg=>r.push(sg));});return r;}
+  const allGoals=[...flattenGoals(db.goals),...db.projects.flatMap(p=>flattenGoals(p.goals||[]))];
+  const allEntries=allGoals.flatMap(g=>g.entries||[]);
+  const now=new Date();
+  const thisM=now.toISOString().slice(0,7);
+  const pf=db.projects.map(p=>{
+    const pg=p.goals||[];
+    const inc=pg.flatMap(g=>g.entries||[]).reduce((s,e)=>s+Number(e.amount),0);
+    const ec=(p.expenses||[]).reduce((s,e)=>s+expCost(e),0);
+    const pc=(p.products||[]).reduce((s,pr)=>s+prodCost(pr,pg.flatMap(g=>g.entries||[])),0);
+    const gc=pg.reduce((s,g)=>s+sumExpensesArr(g.expenses),0);
+    const cogs=calcCOGS(collectEntriesWithCart(pg), p.models||[], p.productTypes||[]).reduce((s,r)=>s+r.totalCost,0);
+    const fees=projectFeesTotal(p);
+    return {name:p.name,income:inc,expenses:ec+pc+gc+cogs+fees,net:inc-ec-pc-gc-cogs-fees,fees};
+  });
+  const totalInc=pf.reduce((s,p)=>s+p.income,0)+db.goals.reduce((s,g)=>s+sumIncome(g.entries),0);
+  const totalExp=pf.reduce((s,p)=>s+p.expenses,0);
+  const totalFees=pf.reduce((s,p)=>s+(p.fees||0),0)+db.goals.reduce((s,g)=>s+goalFeesTotal(g),0);
+  const srcB={};allEntries.forEach(e=>{srcB[e.source||"Other"]=(srcB[e.source||"Other"]||0)+Number(e.amount);});
+
+  if(type==="pl"){
+    const rows=[
+      ["KASA — PROFIT & LOSS"],[fd(today())],[],
+      ["INCOME"],["Project / Goal","Amount (£)"],
+      ...pf.map(p=>[p.name, p.income]),
+      ...db.goals.filter(g=>!g.archived).map(g=>[g.name, sumIncome(g.entries)]),
+      ["TOTAL INCOME", totalInc],[],
+      ["EXPENSES"],["Project","Amount (£)"],
+      ...pf.map(p=>[p.name, p.expenses]),
+      ["TOTAL EXPENSES", totalExp],
+      ["  incl. payment processing fees", totalFees],[],
+      ["NET PROFIT", totalInc-totalExp],[],
+      ["BY SOURCE"],["Source","Amount (£)"],
+      ...Object.entries(srcB).sort((a,b)=>b[1]-a[1]).map(([s,v])=>[s,v])
+    ];
+    return {rows, sheetName:"P&L"};
+  }
+  if(type==="monthly"){
+    const mi=allEntries.filter(e=>e.date.startsWith(thisM)).reduce((s,e)=>s+Number(e.amount),0);
+    const rows=[
+      ["KASA — MONTHLY REPORT"],[now.toLocaleDateString("en-GB",{month:"long",year:"numeric"})],[fd(today())],[],
+      ["Income this month", mi],[],
+      ["GOALS"],["Goal","Earned (£)","Target (£)","Progress %"],
+      ...allGoals.filter(g=>!g.archived&&!g._general).map(g=>{
+        const e=sumIncome(g.entries);
+        const p=g.target>0?Number((e/g.target*100).toFixed(0)):0;
+        return [g.name, e, g.target, p];
+      })
+    ];
+    return {rows, sheetName:"Monthly"};
+  }
+  const rows=[
+    ["KASA — GOALS REPORT"],[fd(today())],[],
+    ["Goal","Earned (£)","Target (£)","Progress %","Days Left","Streak (days)"],
+    ...allGoals.filter(g=>!g.archived&&!g._general).map(g=>{
+      const e=sumIncome(g.entries);
+      const p=g.target>0?Number((e/g.target*100).toFixed(1)):0;
+      return [g.name, e, g.target, p, daysLeft(g), streak(g.entries)];
+    })
+  ];
+  return {rows, sheetName:"Goals"};
+}
+// Download a report as a real .xlsx file (falls back to .txt if the Excel library
+// hasn't loaded — e.g. no internet connection on first load).
+function dlReportXLSX(type, db) {
+  if(typeof XLSX==="undefined"){
+    console.warn("Excel library unavailable (likely offline) — falling back to .txt");
+    dlReport(type, db);
+    return;
+  }
+  const {rows, sheetName}=buildReportRows(type, db);
+  const ws=XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols']=[{wch:30},{wch:16},{wch:14},{wch:14},{wch:12},{wch:12}];
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  XLSX.writeFile(wb, `kasa_${type}.xlsx`);
 }
 function dlCSV(db) {
   const rows=[["Project","Goal","Date","Amount","Source","Fee","Net","Cash","Note","Recurring"]];
@@ -2679,7 +2759,7 @@ function App() {
       updGoal(mod.recur.gid_,g=>{ db_.update('goals',mod.recur.gid_,{recurring:g.recurring}).catch(e=>console.error('Recurring save failed:',e)); return g; },mod.recur.pid);
       setMod(m=>({...m,recur:null}));toast_("Recurring saved ✦");
     }}/>}
-    {mod.report&&<ReportModal content={mod.report.content} type={mod.report.type} onClose={()=>setMod(m=>({...m,report:null}))} onDownload={()=>{dlReport(mod.report.type,db);setMod(m=>({...m,report:null}));}}/>}
+    {mod.report&&<ReportModal content={mod.report.content} type={mod.report.type} onClose={()=>setMod(m=>({...m,report:null}))} onDownload={()=>{dlReportXLSX(mod.report.type,db);setMod(m=>({...m,report:null}));}}/>}
 
 
       {/* ── PRODUCT DETAIL MODAL ── */}
